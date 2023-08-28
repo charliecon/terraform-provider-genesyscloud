@@ -33,7 +33,7 @@ func TestAccResourceSimpleRoutingQueue(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr(fullResourcePath, "name", name),
 					resource.TestCheckResourceAttr(fullResourcePath, "calling_party_name", callingPartyName),
-					resource.TestCheckResourceAttr(fullResourcePath, "enable_transcription", "true"),
+					resource.TestCheckResourceAttr(fullResourcePath, "enable_transcription", enableTranscription),
 				),
 			},
 		},
@@ -42,10 +42,10 @@ func TestAccResourceSimpleRoutingQueue(t *testing.T) {
 
 func generateSimpleRoutingQueueResource(resourceId, name, callingPartyName, enableTranscription string) string {
 	return fmt.Sprintf(`
-resource "genesyscloud_simple_routing_queue" "%s" {
+resource "%s" "%s" {
 	name                 = "%s"
     calling_party_name   = %s
 	enable_transcription = %s
 }
-`, resourceId, name, callingPartyName, enableTranscription)
+`, resourceName, resourceId, name, callingPartyName, enableTranscription)
 }
