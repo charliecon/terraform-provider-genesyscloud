@@ -17,22 +17,22 @@ import (
 
 // dataSourceSimpleRoutingQueueRead retrieves by search term the id in question
 func dataSourceSimpleRoutingQueueRead(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// TODO 1: Get an instance of our proxy
+	// CREATE-TODO 1: Get an instance of our proxy
 
-	// TODO 2: Grab our queue name from the schema.ResourceData object (done)
+	// CREATE-TODO 2: Grab our queue name from the schema.ResourceData object (done)
 	name := d.Get("name").(string)
 
 	log.Printf("Finding queue by name '%s'", name)
 	return gcloud.WithRetries(ctx, 15*time.Second, func() *resource.RetryError {
-		// TODO 3: Call to the proxy function getRoutingQueueIdByName(context.Context, string)
+		// CREATE-TODO 3: Call to the proxy function getRoutingQueueIdByName(context.Context, string)
 		// This function returns values in the following order: queueId (string), retryable (bool), err (error)
 
-		// TODO 4: If the error is not nil, and retryable equals false, return a resource.NonRetryableError
+		// CREATE-TODO 4: If the error is not nil, and retryable equals false, return a resource.NonRetryableError
 		// to let the user know that an error occurred
 
-		// TODO 5: If retryable equals true, return a resource.RetryableError and let them know the queue could not be found with that name
+		// CREATE-TODO 5: If retryable equals true, return a resource.RetryableError and let them know the queue could not be found with that name
 
-		// TODO 6: If we made it this far, we can set the queue ID in the schema.ResourceData object, and return nil
+		// CREATE-TODO 6: If we made it this far, we can set the queue ID in the schema.ResourceData object, and return nil
 
 		return nil
 	})

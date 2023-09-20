@@ -88,7 +88,7 @@ func registerResources() {
 	externalContacts.SetRegistrar(regInstance)
 	resourceExporter.SetRegisterExporter(resourceExporters)
 
-	/* TODO: Import the simple_routing_queue package and call it's SetRegistrar function, as above. */
+	/* CREATE-TODO: Import the simple_routing_queue package and call it's SetRegistrar function, as above. */
 
 	// setting resources for Use cases  like TF export where provider is used in resource classes.
 	tfexp.SetRegistrar(regInstance)
