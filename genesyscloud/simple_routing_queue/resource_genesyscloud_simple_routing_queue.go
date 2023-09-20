@@ -34,32 +34,32 @@ utils file in the package.  This will keep the code manageable and easy to work 
 
 // createSimpleRoutingQueue is used by the genesyscloud_simple_routing_queue resource to create a simple queue in Genesys cloud.
 func createSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// TODO 1: Get an instance of the proxy (example can be found in the delete method below)
+	// CREATE-TODO 1: Get an instance of the proxy (example can be found in the delete method below)
 	sdkConfig := meta.(*gcloud.ProviderMeta).ClientConfig
 	proxy := getSimpleRoutingQueueProxy(sdkConfig)
 
-	// TODO 2: Create variables for each field in our schema.ResourceData object
+	// CREATE-TODO 2: Create variables for each field in our schema.ResourceData object
 	name := d.Get("name").(string)
 	callingPartyName := d.Get("calling_party_name").(string)
 	enableTranscription := d.Get("enable_transcription").(bool)
 
 	log.Printf("Creating simple queue %s", name)
 
-	// TODO 3: Create a queue struct using the Genesys Cloud platform go sdk
+	// CREATE-TODO 3: Create a queue struct using the Genesys Cloud platform go sdk
 	queueCreate := &platformclientv2.Createqueuerequest{
 		Name:                &name,
 		CallingPartyName:    &callingPartyName,
 		EnableTranscription: &enableTranscription,
 	}
 
-	// TODO 4: Call the proxy function to create our queue. The proxy function we want to use here is createRoutingQueue(ctx context.Context, queue *platformclientv2.Createqueuerequest)
+	// CREATE-TODO 4: Call the proxy function to create our queue. The proxy function we want to use here is createRoutingQueue(ctx context.Context, queue *platformclientv2.Createqueuerequest)
 	// Note: We won't need the response object returned. Also, don't forget about error handling!
 	queueResp, _, err := proxy.createRoutingQueue(ctx, queueCreate)
 	if err != nil {
 		return diag.Errorf("failed to create queue %s: %v", name, err)
 	}
 
-	// TODO 5: Set ID in the schema.ResourceData object
+	// CREATE-TODO 5: Set ID in the schema.ResourceData object
 	d.SetId(*queueResp.Id)
 
 	return readSimpleRoutingQueue(ctx, d, meta)
@@ -67,14 +67,14 @@ func createSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta 
 
 // readSimpleRoutingQueue is used by the genesyscloud_simple_routing_queue resource to read a simple queue from Genesys cloud.
 func readSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// TODO 1: Get an instance of the proxy
+	// CREATE-TODO 1: Get an instance of the proxy
 	sdkConfig := meta.(*gcloud.ProviderMeta).ClientConfig
 	proxy := getSimpleRoutingQueueProxy(sdkConfig)
 
 	log.Printf("Reading simple queue %s", d.Id())
 	return gcloud.WithRetriesForRead(ctx, d, func() *resource.RetryError {
 		/*
-			TODO 2: Call the proxy function getRoutingQueue(ctx context.Context, id string) to find our queue, passing in the ID from the resource data object
+			CREATE-TODO 2: Call the proxy function getRoutingQueue(ctx context.Context, id string) to find our queue, passing in the ID from the resource data object
 			The returned value are: Queue, Status Code (int), error
 			If the error is not nil, we should pass the status code to the function gcloud.IsStatus404ByInt(int)
 			If the status code is 404, return a resource.RetryableError. Otherwise, it should be a NonRetryableError
@@ -90,7 +90,7 @@ func readSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta in
 		// Define consistency checker
 		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceSimpleRoutingQueue())
 
-		// TODO 3: Set our values in the schema resource data, based on the values in the Queue object returned from the API
+		// CREATE-TODO 3: Set our values in the schema resource data, based on the values in the Queue object returned from the API
 		_ = d.Set("name", *currentQueue.Name)
 		resourcedata.SetNillableValue(d, "calling_party_name", currentQueue.CallingPartyName)
 		resourcedata.SetNillableValue(d, "enable_transcription", currentQueue.EnableTranscription)
@@ -101,25 +101,25 @@ func readSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta in
 
 // updateSimpleRoutingQueue is used by the genesyscloud_simple_routing_queue resource to update a simple queue in Genesys cloud.
 func updateSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// TODO 1: Get an instance of the proxy
+	// CREATE-TODO 1: Get an instance of the proxy
 	sdkConfig := meta.(*gcloud.ProviderMeta).ClientConfig
 	proxy := getSimpleRoutingQueueProxy(sdkConfig)
 
 	log.Printf("Updating simple queue %s", d.Id())
 
-	// TODO 2: Create variables for each field in our schema.ResourceData object
+	// CREATE-TODO 2: Create variables for each field in our schema.ResourceData object
 	name := d.Get("name").(string)
 	callingPartyName := d.Get("calling_party_name").(string)
 	enableTranscription := d.Get("enable_transcription").(bool)
 
-	// TODO	3: Create a queue struct using the Genesys Cloud platform go sdk
+	// CREATE-TODO	3: Create a queue struct using the Genesys Cloud platform go sdk
 	queueUpdate := &platformclientv2.Queuerequest{
 		Name:                &name,
 		CallingPartyName:    &callingPartyName,
 		EnableTranscription: &enableTranscription,
 	}
 
-	// TODO 4: Call the proxy function updateRoutingQueue(context.Context, id string, *platformclientv2.Queuerequest) to update our queue
+	// CREATE-TODO 4: Call the proxy function updateRoutingQueue(context.Context, id string, *platformclientv2.Queuerequest) to update our queue
 	_, _, err := proxy.updateRoutingQueue(ctx, d.Id(), queueUpdate)
 	if err != nil {
 		return diag.Errorf("failed to update queue %s: %v", name, err)
@@ -130,14 +130,14 @@ func updateSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta 
 
 // deleteSimpleRoutingQueue is used by the genesyscloud_simple_routing_queue resource to delete a simple queue from Genesys cloud.
 func deleteSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	// TODO 1: Get an instance of the proxy (done)
+	// CREATE-TODO 1: Get an instance of the proxy (done)
 	sdkConfig := meta.(*gcloud.ProviderMeta).ClientConfig
 	proxy := getSimpleRoutingQueueProxy(sdkConfig)
 
 	log.Printf("Deleting simple queue %s", d.Id())
 
 	/*
-		TODO 2: Call the proxy function deleteRoutingQueue(ctx context.Context, id string)
+		CREATE-TODO 2: Call the proxy function deleteRoutingQueue(ctx context.Context, id string)
 		Again, we won't be needing the returned response object
 	*/
 	if _, err := proxy.deleteRoutingQueue(ctx, d.Id()); err != nil {
