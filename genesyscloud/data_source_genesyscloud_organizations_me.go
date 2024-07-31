@@ -2,16 +2,19 @@ package genesyscloud
 
 import (
 	"context"
+	"fmt"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v105/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
 
-func dataSourceOrganizationsMe() *schema.Resource {
+func DataSourceOrganizationsMe() *schema.Resource {
 	return &schema.Resource{
 		Description: "Data source for Genesys Cloud current organization",
-		ReadContext: ReadWithPooledClient(dataSourceOrganizationsMeRead),
+		ReadContext: provider.ReadWithPooledClient(dataSourceOrganizationsMeRead),
 		Schema: map[string]*schema.Schema{
 			"id": {
 				Type:     schema.TypeString,
@@ -68,12 +71,12 @@ func dataSourceOrganizationsMe() *schema.Resource {
 }
 
 func dataSourceOrganizationsMeRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	sdkConfig := m.(*ProviderMeta).ClientConfig
+	sdkConfig := m.(*provider.ProviderMeta).ClientConfig
 	orgAPI := platformclientv2.NewOrganizationApiWithConfig(sdkConfig)
 
-	orgMe, _, getErr := orgAPI.GetOrganizationsMe()
+	orgMe, resp, getErr := orgAPI.GetOrganizationsMe()
 	if getErr != nil {
-		return diag.Errorf("Error requesting organization: %s", getErr)
+		return util.BuildAPIDiagnosticError("genesyscloud_organizations_me", fmt.Sprintf("Error requesting organization: %s", getErr), resp)
 	}
 
 	d.SetId(*orgMe.Id)
@@ -106,4 +109,10 @@ func dataSourceOrganizationsMeRead(ctx context.Context, d *schema.ResourceData, 
 	}
 
 	return nil
+}
+
+func GenerateOrganizationMe() string {
+	return `
+data "genesyscloud_organizations_me" "me" {}
+`
 }

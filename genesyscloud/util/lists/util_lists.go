@@ -1,6 +1,7 @@
 package lists
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -34,7 +35,7 @@ func SubStringInSlice(a string, list []string) bool {
 	return false
 }
 
-// difference returns the elements in a that aren't in b
+// SliceDifference returns the elements in a that aren't in b
 func SliceDifference(a, b []string) []string {
 	var diff []string
 	if len(a) == 0 {
@@ -52,20 +53,21 @@ func SliceDifference(a, b []string) []string {
 	return diff
 }
 
-// Returns true if a and b are equivalent, ignoring the ordering of the items.
-func ListsAreEquivalent(a []string, b []string) bool {
+// AreEquivalent takes two string lists and returns true if they are equivalent, ignoring the ordering of the items.
+func AreEquivalent(a []string, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for _, aItem := range a {
-		matchFound := false
-		for _, bItem := range b {
-			if bItem == aItem {
-				matchFound = true
-				break
-			}
-		}
-		if !matchFound {
+	aCopy := make([]string, len(a))
+	copy(aCopy, a)
+	bCopy := make([]string, len(b))
+	copy(bCopy, b)
+
+	sort.Strings(aCopy)
+	sort.Strings(bCopy)
+
+	for i := 0; i < len(aCopy); i++ {
+		if aCopy[i] != bCopy[i] {
 			return false
 		}
 	}
@@ -158,4 +160,26 @@ func NilToEmptyList[T interface{}](list *[]T) *[]T {
 		return &emptyArray
 	}
 	return list
+}
+
+// Remove an item from a string list based on the value
+func Remove[T comparable](s []T, r T) []T {
+	for i, v := range s {
+		if v == r {
+			return append(s[:i], s[i+1:]...)
+		}
+	}
+	return s
+}
+
+// ConvertMapStringAnyToMapStringString converts a map of type map[string]any to type map[string]string
+func ConvertMapStringAnyToMapStringString(m map[string]any) map[string]string {
+	if m == nil {
+		return nil
+	}
+	sm := make(map[string]string)
+	for k, v := range m {
+		sm[k] = v.(string)
+	}
+	return sm
 }

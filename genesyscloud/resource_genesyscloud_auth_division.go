@@ -4,15 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
+	"terraform-provider-genesyscloud/genesyscloud/util/constants"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 
 	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v105/platformclientv2"
 	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
 
 func getAllAuthDivisions(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
@@ -21,9 +26,9 @@ func getAllAuthDivisions(_ context.Context, clientConfig *platformclientv2.Confi
 
 	for pageNum := 1; ; pageNum++ {
 		const pageSize = 100
-		divisions, _, getErr := authAPI.GetAuthorizationDivisions(pageSize, pageNum, "", nil, "", "", false, nil, "")
+		divisions, resp, getErr := authAPI.GetAuthorizationDivisions(pageSize, pageNum, "", nil, "", "", false, nil, "")
 		if getErr != nil {
-			return nil, diag.Errorf("Failed to get page of divisions: %v", getErr)
+			return nil, util.BuildAPIDiagnosticError("genesyscloud_auth_division", fmt.Sprintf("Failed to get page of divisions error: %s", getErr), resp)
 		}
 
 		if divisions.Entities == nil || len(*divisions.Entities) == 0 {
@@ -40,7 +45,7 @@ func getAllAuthDivisions(_ context.Context, clientConfig *platformclientv2.Confi
 
 func AuthDivisionExporter() *resourceExporter.ResourceExporter {
 	return &resourceExporter.ResourceExporter{
-		GetResourcesFunc: GetAllWithPooledClient(getAllAuthDivisions),
+		GetResourcesFunc: provider.GetAllWithPooledClient(getAllAuthDivisions),
 		RefAttrs:         map[string]*resourceExporter.RefAttrSettings{}, // No references
 	}
 }
@@ -49,10 +54,10 @@ func ResourceAuthDivision() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Authorization Division",
 
-		CreateContext: CreateWithPooledClient(createAuthDivision),
-		ReadContext:   ReadWithPooledClient(readAuthDivision),
-		UpdateContext: UpdateWithPooledClient(updateAuthDivision),
-		DeleteContext: DeleteWithPooledClient(deleteAuthDivision),
+		CreateContext: provider.CreateWithPooledClient(createAuthDivision),
+		ReadContext:   provider.ReadWithPooledClient(readAuthDivision),
+		UpdateContext: provider.UpdateWithPooledClient(updateAuthDivision),
+		DeleteContext: provider.DeleteWithPooledClient(deleteAuthDivision),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -83,12 +88,12 @@ func createAuthDivision(ctx context.Context, d *schema.ResourceData, meta interf
 	description := d.Get("description").(string)
 	home := d.Get("home").(bool)
 
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	authAPI := platformclientv2.NewAuthorizationApiWithConfig(sdkConfig)
 
 	if home {
 		// Home division must already exist, or it cannot be modified
-		id, diagErr := getHomeDivisionID()
+		id, diagErr := util.GetHomeDivisionID()
 		if diagErr != nil {
 			return diagErr
 		}
@@ -97,12 +102,12 @@ func createAuthDivision(ctx context.Context, d *schema.ResourceData, meta interf
 	}
 
 	log.Printf("Creating division %s", name)
-	division, _, err := authAPI.PostAuthorizationDivisions(platformclientv2.Authzdivision{
+	division, resp, err := authAPI.PostAuthorizationDivisions(platformclientv2.Authzdivision{
 		Name:        &name,
 		Description: &description,
 	})
 	if err != nil {
-		return diag.Errorf("Failed to create division %s: %s", name, err)
+		return util.BuildAPIDiagnosticError("genesyscloud_auth_division", fmt.Sprintf("Failed to create division %s error: %s", name, err), resp)
 	}
 
 	d.SetId(*division.Id)
@@ -111,21 +116,21 @@ func createAuthDivision(ctx context.Context, d *schema.ResourceData, meta interf
 }
 
 func readAuthDivision(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	authAPI := platformclientv2.NewAuthorizationApiWithConfig(sdkConfig)
+	cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceAuthDivision(), constants.DefaultConsistencyChecks, "genesyscloud_auth_division")
 
 	log.Printf("Reading division %s", d.Id())
 
-	return WithRetriesForRead(ctx, d, func() *resource.RetryError {
+	return util.WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		division, resp, getErr := authAPI.GetAuthorizationDivision(d.Id(), false)
 		if getErr != nil {
-			if IsStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read division %s: %s", d.Id(), getErr))
+			if util.IsStatus404(resp) {
+				return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_auth_division", fmt.Sprintf("Failed to read division %s | error: %s", d.Id(), getErr), resp))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read division %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_auth_division", fmt.Sprintf("Failed to read division %s | error: %s", d.Id(), getErr), resp))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceAuthDivision())
 		d.Set("name", *division.Name)
 
 		if division.Description != nil {
@@ -141,7 +146,7 @@ func readAuthDivision(ctx context.Context, d *schema.ResourceData, meta interfac
 		}
 
 		log.Printf("Read division %s %s", d.Id(), *division.Name)
-		return cc.CheckState()
+		return cc.CheckState(d)
 	})
 }
 
@@ -149,16 +154,16 @@ func updateAuthDivision(ctx context.Context, d *schema.ResourceData, meta interf
 	name := d.Get("name").(string)
 	description := d.Get("description").(string)
 
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	authAPI := platformclientv2.NewAuthorizationApiWithConfig(sdkConfig)
 
 	log.Printf("Updating division %s", name)
-	_, _, err := authAPI.PutAuthorizationDivision(d.Id(), platformclientv2.Authzdivision{
+	_, resp, err := authAPI.PutAuthorizationDivision(d.Id(), platformclientv2.Authzdivision{
 		Name:        &name,
 		Description: &description,
 	})
 	if err != nil {
-		return diag.Errorf("Failed to update division %s: %s", name, err)
+		return util.BuildAPIDiagnosticError("genesyscloud_auth_division", fmt.Sprintf("Failed to update division %s error: %s", name, err), resp)
 	}
 
 	log.Printf("Updated division %s", name)
@@ -170,7 +175,7 @@ func deleteAuthDivision(ctx context.Context, d *schema.ResourceData, meta interf
 	name := d.Get("name").(string)
 	home := d.Get("home").(bool)
 
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	authAPI := platformclientv2.NewAuthorizationApiWithConfig(sdkConfig)
 
 	if home {
@@ -179,22 +184,47 @@ func deleteAuthDivision(ctx context.Context, d *schema.ResourceData, meta interf
 		return nil
 	}
 
-	log.Printf("Deleting division %s", name)
-	_, err := authAPI.DeleteAuthorizationDivision(d.Id(), false)
-	if err != nil {
-		return diag.Errorf("Failed to delete division %s: %s", name, err)
+	// Sometimes a division with resources in it priorly still thinks it is attached to those resources during a destroy run.
+	// We're retrying again as those resources should detach completely eventually.
+	diagErr := util.RetryWhen(util.IsStatus400, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+		log.Printf("Deleting division %s", name)
+		resp, err := authAPI.DeleteAuthorizationDivision(d.Id(), false)
+		if err != nil {
+			return resp, util.BuildAPIDiagnosticError("genesyscloud_auth_division", fmt.Sprintf("Failed to delete Division %s error: %s", d.Id(), err), resp)
+		}
+		return resp, nil
+	})
+	if diagErr != nil {
+		return diagErr
 	}
 
-	return WithRetries(ctx, 180*time.Second, func() *resource.RetryError {
+	return util.WithRetries(ctx, 180*time.Second, func() *retry.RetryError {
 		_, resp, err := authAPI.GetAuthorizationDivision(d.Id(), false)
 		if err != nil {
-			if IsStatus404(resp) {
+			if util.IsStatus404(resp) {
 				// Division deleted
 				log.Printf("Deleted division %s", name)
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting division %s: %s", name, err))
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_auth_division", fmt.Sprintf("Error deleting division %s | error:: %s", name, err), resp))
 		}
-		return resource.RetryableError(fmt.Errorf("Division %s still exists", name))
+		return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_auth_division", fmt.Sprintf("Division %s still exists", name), resp))
 	})
+}
+
+func GenerateAuthDivisionBasic(resourceID string, name string) string {
+	return GenerateAuthDivisionResource(resourceID, name, util.NullValue, util.FalseValue)
+}
+
+func GenerateAuthDivisionResource(
+	resourceID string,
+	name string,
+	description string,
+	home string) string {
+	return fmt.Sprintf(`resource "genesyscloud_auth_division" "%s" {
+		name = "%s"
+		description = %s
+		home = %s
+	}
+	`, resourceID, name, description, home)
 }

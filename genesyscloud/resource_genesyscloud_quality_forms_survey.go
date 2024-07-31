@@ -4,21 +4,60 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
+	"terraform-provider-genesyscloud/genesyscloud/util/constants"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 
 	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
 
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/mypurecloud/platform-client-sdk-go/v105/platformclientv2"
-	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
+
+type SurveyFormStruct struct {
+	Name           string
+	Published      bool
+	Disabled       bool
+	ContextId      int
+	Language       string
+	Header         string
+	Footer         string
+	QuestionGroups []SurveyFormQuestionGroupStruct
+}
+
+type SurveyFormQuestionGroupStruct struct {
+	Name                string
+	NaEnabled           bool
+	Questions           []SurveyFormQuestionStruct
+	VisibilityCondition VisibilityConditionStruct
+}
+
+type SurveyFormQuestionStruct struct {
+	Text                  string
+	HelpText              string
+	VarType               string
+	NaEnabled             bool
+	VisibilityCondition   VisibilityConditionStruct
+	AnswerOptions         []AnswerOptionStruct
+	MaxResponseCharacters int
+	ExplanationPrompt     string
+}
 
 var (
 	surveyQuestionGroup = &schema.Resource{
 		Schema: map[string]*schema.Schema{
+			"id": {
+				Description: "The ID of the survey question group.",
+				Type:        schema.TypeString,
+				Computed:    true,
+			},
 			"name": {
 				Description: "Name of display question in question group.",
 				Type:        schema.TypeString,
@@ -49,6 +88,11 @@ var (
 
 	surveyQuestion = &schema.Resource{
 		Schema: map[string]*schema.Schema{
+			"id": {
+				Description: "The ID of the survey question.",
+				Type:        schema.TypeString,
+				Computed:    true,
+			},
 			"text": {
 				Description: "Individual question",
 				Type:        schema.TypeString,
@@ -117,6 +161,11 @@ var (
 
 	surveyFormAnswerOptions = &schema.Resource{
 		Schema: map[string]*schema.Schema{
+			"id": {
+				Type:        schema.TypeString,
+				Description: "The ID of the survey answer option.",
+				Computed:    true,
+			},
 			"text": {
 				Type:     schema.TypeString,
 				Required: true,
@@ -127,19 +176,20 @@ var (
 			},
 			"assistance_conditions": {
 				Description: "Options from which to choose an answer for this question.",
-				Type:        schema.TypeList,
+				Type:        schema.TypeSet,
 				Optional:    true,
-				Elem:        assistanceConditions,
+				Elem:        assistanceConditionsResource,
 			},
 		},
 	}
 
-	assistanceConditions = &schema.Resource{
+	assistanceConditionsResource = &schema.Resource{
 		Schema: map[string]*schema.Schema{
 			"operator": {
-				Description: "List of assistance conditions which are combined together with a logical AND operator. Eg ( assistanceCondtion1 && assistanceCondition2 ) wherein assistanceCondition could be ( EXISTS topic1 || topic2 || ... ) or (NOTEXISTS topic3 || topic4 || ...).",
-				Type:        schema.TypeString,
-				Optional:    true,
+				Description:  "List of assistance conditions which are combined together with a logical AND operator. Eg ( assistanceCondtion1 && assistanceCondition2 ) wherein assistanceCondition could be ( EXISTS topic1 || topic2 || ... ) or (NOTEXISTS topic3 || topic4 || ...).",
+				Type:         schema.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringInSlice([]string{"EXISTS", "NOTEXISTS"}, true),
 			},
 			"topic_ids": {
 				Description: "List of topicIds within the assistance condition which would be combined together using logical OR operator. Eg ( topicId_1 || topicId_2 ) .",
@@ -157,9 +207,9 @@ func getAllSurveyForms(_ context.Context, clientConfig *platformclientv2.Configu
 
 	for pageNum := 1; ; pageNum++ {
 		const pageSize = 100
-		surveyForms, _, getErr := qualityAPI.GetQualityFormsSurveys(pageSize, pageNum, "", "", "", "", "", "")
+		surveyForms, resp, getErr := qualityAPI.GetQualityFormsSurveys(pageSize, pageNum, "", "", "", "", "", "")
 		if getErr != nil {
-			return nil, diag.Errorf("Failed to get page of survey forms %v", getErr)
+			return nil, util.BuildAPIDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Failed to get quality forms surveys error: %s", getErr), resp)
 		}
 
 		if surveyForms.Entities == nil || len(*surveyForms.Entities) == 0 {
@@ -176,19 +226,24 @@ func getAllSurveyForms(_ context.Context, clientConfig *platformclientv2.Configu
 
 func SurveyFormExporter() *resourceExporter.ResourceExporter {
 	return &resourceExporter.ResourceExporter{
-		GetResourcesFunc: GetAllWithPooledClient(getAllSurveyForms),
+		GetResourcesFunc: provider.GetAllWithPooledClient(getAllSurveyForms),
 		RefAttrs:         map[string]*resourceExporter.RefAttrSettings{}, // No references
 		AllowZeroValues:  []string{"question_groups.questions.answer_options.value"},
+		ExcludedAttributes: []string{
+			"question_groups.id",
+			"question_groups.questions.id",
+			"question_groups.questions.answer_options.id",
+		},
 	}
 }
 
 func ResourceSurveyForm() *schema.Resource {
 	return &schema.Resource{
 		Description:   "Genesys Cloud Survey Forms",
-		CreateContext: CreateWithPooledClient(createSurveyForm),
-		ReadContext:   ReadWithPooledClient(readSurveyForm),
-		UpdateContext: UpdateWithPooledClient(updateSurveyForm),
-		DeleteContext: DeleteWithPooledClient(deleteSurveyForm),
+		CreateContext: provider.CreateWithPooledClient(createSurveyForm),
+		ReadContext:   provider.ReadWithPooledClient(readSurveyForm),
+		UpdateContext: provider.UpdateWithPooledClient(updateSurveyForm),
+		DeleteContext: provider.DeleteWithPooledClient(deleteSurveyForm),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -251,11 +306,11 @@ func createSurveyForm(ctx context.Context, d *schema.ResourceData, meta interfac
 		return qgErr
 	}
 
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
 
 	log.Printf("Creating Survey Form %s", name)
-	form, _, err := qualityAPI.PostQualityFormsSurveys(platformclientv2.Surveyform{
+	form, resp, err := qualityAPI.PostQualityFormsSurveys(platformclientv2.Surveyform{
 		Name:           &name,
 		Disabled:       &disabled,
 		Language:       &language,
@@ -264,7 +319,7 @@ func createSurveyForm(ctx context.Context, d *schema.ResourceData, meta interfac
 		QuestionGroups: questionGroups,
 	})
 	if err != nil {
-		return diag.Errorf("Failed to create survey form %s: %s", name, err)
+		return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Failed to create survey form %s error: %s", name, err), resp)
 	}
 
 	// Make sure form is properly created
@@ -274,12 +329,12 @@ func createSurveyForm(ctx context.Context, d *schema.ResourceData, meta interfac
 
 	// Publishing
 	if published {
-		_, _, err := qualityAPI.PostQualityPublishedformsSurveys(platformclientv2.Publishform{
+		_, resp, err := qualityAPI.PostQualityPublishedformsSurveys(platformclientv2.Publishform{
 			Id:        formId,
 			Published: &published,
 		})
 		if err != nil {
-			return diag.Errorf("Failed to publish survey form %s", name)
+			return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Failed to publish survey form %s error: %s", name, err), resp)
 		}
 	}
 
@@ -290,20 +345,20 @@ func createSurveyForm(ctx context.Context, d *schema.ResourceData, meta interfac
 }
 
 func readSurveyForm(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
-	log.Printf("Reading survey form %s", d.Id())
+	cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceSurveyForm(), constants.DefaultConsistencyChecks, "genesyscloud_quality_forms_survey")
 
-	return WithRetriesForRead(ctx, d, func() *resource.RetryError {
+	log.Printf("Reading survey form %s", d.Id())
+	return util.WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		surveyForm, resp, getErr := qualityAPI.GetQualityFormsSurvey(d.Id())
 		if getErr != nil {
-			if IsStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read survey form %s: %s", d.Id(), getErr))
+			if util.IsStatus404(resp) {
+				return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Failed to read survey form %s | error: %s", d.Id(), getErr), resp))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read survey form %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Failed to read survey form %s | error: %s", d.Id(), getErr), resp))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceSurveyForm())
 		if surveyForm.Name != nil {
 			d.Set("name", *surveyForm.Name)
 		}
@@ -326,7 +381,7 @@ func readSurveyForm(ctx context.Context, d *schema.ResourceData, meta interface{
 			d.Set("question_groups", flattenSurveyQuestionGroups(surveyForm.QuestionGroups))
 		}
 
-		return cc.CheckState()
+		return cc.CheckState(d)
 	})
 }
 
@@ -343,15 +398,15 @@ func updateSurveyForm(ctx context.Context, d *schema.ResourceData, meta interfac
 		return qgErr
 	}
 
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
 
-	diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	diagErr := util.RetryWhen(util.IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 
 		// Get the latest unpublished version of the form
 		formVersions, getResp, err := qualityAPI.GetQualityFormsSurveyVersions(d.Id(), 25, 1)
 		if err != nil {
-			return getResp, diag.Errorf("Failed to get survey form versions %s", name)
+			return getResp, util.BuildAPIDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Failed to get survey form versions %s error: %s", name, err), getResp)
 		}
 
 		versions := *formVersions.Entities
@@ -372,7 +427,7 @@ func updateSurveyForm(ctx context.Context, d *schema.ResourceData, meta interfac
 			QuestionGroups: questionGroups,
 		})
 		if err != nil {
-			return putResp, diag.Errorf("Failed to update survey form %s: %v", name, err)
+			return putResp, util.BuildAPIDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Failed to update survey form %s error: %s", name, err), putResp)
 		}
 		log.Printf("Updated survey form %s %s", name, *form.Id)
 
@@ -383,7 +438,7 @@ func updateSurveyForm(ctx context.Context, d *schema.ResourceData, meta interfac
 				Published: &published,
 			})
 			if err != nil {
-				return postResp, diag.Errorf("Failed to publish survey form %s", name)
+				return postResp, util.BuildAPIDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Failed to publish survey form %s error: %s", name, err), postResp)
 			}
 		} else {
 			// If published property is reset to false, set the resource Id to the latest unpublished form
@@ -400,13 +455,13 @@ func updateSurveyForm(ctx context.Context, d *schema.ResourceData, meta interfac
 func deleteSurveyForm(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	name := d.Get("name").(string)
 
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
 
 	// Get the latest unpublished version of the form
-	formVersions, _, err := qualityAPI.GetQualityFormsSurveyVersions(d.Id(), 25, 1)
+	formVersions, resp, err := qualityAPI.GetQualityFormsSurveyVersions(d.Id(), 25, 1)
 	if err != nil {
-		return diag.Errorf("Failed to get survey form versions %s", name)
+		return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Failed to get survey form versions %s error: %s", name, err), resp)
 	}
 	versions := *formVersions.Entities
 	latestUnpublishedVersion := ""
@@ -418,22 +473,22 @@ func deleteSurveyForm(ctx context.Context, d *schema.ResourceData, meta interfac
 	d.SetId(latestUnpublishedVersion)
 
 	log.Printf("Deleting survey form %s", name)
-	if _, err := qualityAPI.DeleteQualityFormsSurvey(d.Id()); err != nil {
-		return diag.Errorf("Failed to delete survey form %s: %s", name, err)
+	if resp, err := qualityAPI.DeleteQualityFormsSurvey(d.Id()); err != nil {
+		return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Failed to delete survey form %s error: %s", name, err), resp)
 	}
 
-	return WithRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return util.WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		_, resp, err := qualityAPI.GetQualityFormsSurvey(d.Id())
 		if err != nil {
-			if IsStatus404(resp) {
+			if util.IsStatus404(resp) {
 				// survey form deleted
 				log.Printf("Deleted survey form %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting survey form %s: %s", d.Id(), err))
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Error deleting survey form %s | error: %s", d.Id(), err), resp))
 		}
 
-		return resource.RetryableError(fmt.Errorf("Survey form %s still exists", d.Id()))
+		return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_quality_forms_survey", fmt.Sprintf("Survey form %s still exists", d.Id()), resp))
 	})
 }
 
@@ -477,13 +532,14 @@ func buildSurveyQuestions(questions []interface{}) *[]platformclientv2.Surveyque
 		naEnabled := questionsMap["na_enabled"].(bool)
 		answerQuestions := questionsMap["answer_options"].([]interface{})
 		maxResponseCharacters := questionsMap["max_response_characters"].(int)
+		sdkAnswerOptions := buildSdkAnswerOptions(answerQuestions)
 
 		sdkQuestion := platformclientv2.Surveyquestion{
 			Text:                  &text,
 			HelpText:              &helpText,
 			VarType:               &questionType,
 			NaEnabled:             &naEnabled,
-			AnswerOptions:         buildSdkAnswerOptions(answerQuestions),
+			AnswerOptions:         sdkAnswerOptions,
 			MaxResponseCharacters: &maxResponseCharacters,
 		}
 
@@ -506,10 +562,13 @@ func flattenSurveyQuestionGroups(questionGroups *[]platformclientv2.Surveyquesti
 		return nil
 	}
 
-	questionGroupList := []interface{}{}
+	var questionGroupList []interface{}
 
 	for _, questionGroup := range *questionGroups {
 		questionGroupMap := make(map[string]interface{})
+		if questionGroup.Id != nil {
+			questionGroupMap["id"] = *questionGroup.Id
+		}
 		if questionGroup.Name != nil {
 			questionGroupMap["name"] = *questionGroup.Name
 		}
@@ -533,10 +592,13 @@ func flattenSurveyQuestions(questions *[]platformclientv2.Surveyquestion) []inte
 		return nil
 	}
 
-	questionList := []interface{}{}
+	var questionList []interface{}
 
 	for _, question := range *questions {
 		questionMap := make(map[string]interface{})
+		if question.Id != nil {
+			questionMap["id"] = *question.Id
+		}
 		if question.Text != nil {
 			questionMap["text"] = *question.Text
 		}
@@ -565,4 +627,109 @@ func flattenSurveyQuestions(questions *[]platformclientv2.Surveyquestion) []inte
 		questionList = append(questionList, questionMap)
 	}
 	return questionList
+}
+
+func GenerateSurveyFormResource(resourceID string, surveyForm *SurveyFormStruct) string {
+	form := fmt.Sprintf(`resource "genesyscloud_quality_forms_survey" "%s" {
+		name = "%s"
+		published = %v
+		disabled = %v
+        language = "%s"
+        header = "%s"
+        footer = "%s"
+		%s
+        %s
+	}
+	`, resourceID,
+		surveyForm.Name,
+		surveyForm.Published,
+		surveyForm.Disabled,
+		surveyForm.Language,
+		surveyForm.Header,
+		surveyForm.Footer,
+		generateSurveyFormQuestionGroups(&surveyForm.QuestionGroups),
+		generateLifeCycle(),
+	)
+
+	return form
+}
+
+func generateLifeCycle() string {
+	return `
+	lifecycle {
+		ignore_changes = [
+			question_groups[0].questions[0].type,
+			question_groups[0].questions[1].type,
+			question_groups[0].questions[2].type,
+			question_groups[1].questions[0].type,
+			question_groups[1].questions[1].type,
+			question_groups[1].questions[2].type,
+			question_groups[2].questions[0].type,
+			question_groups[2].questions[1].type,
+			question_groups[2].questions[2].type,
+		]
+	}
+	`
+}
+
+func generateSurveyFormQuestions(questions *[]SurveyFormQuestionStruct) string {
+	if questions == nil {
+		return ""
+	}
+
+	questionsString := ""
+
+	for _, question := range *questions {
+		questionString := fmt.Sprintf(`
+        questions {
+            text = "%s"
+            help_text = "%s"
+            type = "%s"
+            na_enabled = %v
+            %s
+            %s
+            max_response_characters = %v
+            explanation_prompt = "%s"
+        }
+        `, question.Text,
+			question.HelpText,
+			question.VarType,
+			question.NaEnabled,
+			GenerateFormVisibilityCondition(&question.VisibilityCondition),
+			GenerateFormAnswerOptions(&question.AnswerOptions),
+			question.MaxResponseCharacters,
+			question.ExplanationPrompt,
+		)
+
+		questionsString += questionString
+	}
+
+	return questionsString
+}
+
+func generateSurveyFormQuestionGroups(questionGroups *[]SurveyFormQuestionGroupStruct) string {
+	if questionGroups == nil {
+		return ""
+	}
+
+	questionGroupsString := ""
+
+	for _, questionGroup := range *questionGroups {
+		questionGroupString := fmt.Sprintf(`
+        question_groups {
+            name = "%s"
+            na_enabled = %v
+            %s
+            %s
+        }
+        `, questionGroup.Name,
+			questionGroup.NaEnabled,
+			generateSurveyFormQuestions(&questionGroup.Questions),
+			GenerateFormVisibilityCondition(&questionGroup.VisibilityCondition),
+		)
+
+		questionGroupsString += questionGroupString
+	}
+
+	return questionGroupsString
 }

@@ -3,23 +3,24 @@ package tfexporter
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
-	"log"
 	"os"
-	"path"
-
-	gcloud "terraform-provider-genesyscloud/genesyscloud"
+	"path/filepath"
+	"terraform-provider-genesyscloud/genesyscloud/validators"
 
 	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 
-	"github.com/hashicorp/go-cty/cty"
-
 	registrar "terraform-provider-genesyscloud/genesyscloud/resource_register"
+
+	"terraform-provider-genesyscloud/genesyscloud/tfexporter_state"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
+
+type fileMeta struct {
+	Path  string
+	IsDir bool
+}
 
 func SetRegistrar(l registrar.Registrar) {
 	l.RegisterResource("genesyscloud_tf_export", ResourceTfExport())
@@ -33,9 +34,9 @@ func ResourceTfExport() *schema.Resource {
 		The config file is named '%s' or '%s', and the state file is named '%s'.
 		`, defaultTfJSONFile, defaultTfHCLFile, defaultTfStateFile),
 
-		CreateContext: createTfExport,
-		ReadContext:   readTfExport,
-		DeleteContext: deleteTfExport,
+		CreateWithoutTimeout: createTfExport,
+		ReadWithoutTimeout:   readTfExport,
+		DeleteContext:        deleteTfExport,
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -53,7 +54,7 @@ func ResourceTfExport() *schema.Resource {
 				Optional:    true,
 				Elem: &schema.Schema{
 					Type:         schema.TypeString,
-					ValidateFunc: gcloud.ValidateSubStringInSlice(resourceExporter.GetAvailableExporterTypes()),
+					ValidateFunc: validators.ValidateSubStringInSlice(resourceExporter.GetAvailableExporterTypes()),
 				},
 				ForceNew:      true,
 				Deprecated:    "Use include_filter_resources attribute instead",
@@ -65,10 +66,19 @@ func ResourceTfExport() *schema.Resource {
 				Optional:    true,
 				Elem: &schema.Schema{
 					Type:         schema.TypeString,
-					ValidateFunc: gcloud.ValidateSubStringInSlice(resourceExporter.GetAvailableExporterTypes()),
+					ValidateFunc: validators.ValidateSubStringInSlice(resourceExporter.GetAvailableExporterTypes()),
 				},
 				ForceNew:      true,
 				ConflictsWith: []string{"resource_types", "exclude_filter_resources"},
+			},
+			"replace_with_datasource": {
+				Description: "Include only resources that match either a resource type or a resource type::regular expression.  See export guide for additional information",
+				Type:        schema.TypeList,
+				Optional:    true,
+				Elem: &schema.Schema{
+					Type: schema.TypeString,
+				},
+				ForceNew: true,
 			},
 			"exclude_filter_resources": {
 				Description: "Exclude resources that match either a resource type or a resource type::regular expression.  See export guide for additional information",
@@ -76,7 +86,7 @@ func ResourceTfExport() *schema.Resource {
 				Optional:    true,
 				Elem: &schema.Schema{
 					Type:         schema.TypeString,
-					ValidateFunc: gcloud.ValidateSubStringInSlice(resourceExporter.GetAvailableExporterTypes()),
+					ValidateFunc: validators.ValidateSubStringInSlice(resourceExporter.GetAvailableExporterTypes()),
 				},
 				ForceNew:      true,
 				ConflictsWith: []string{"resource_types", "include_filter_resources"},
@@ -90,6 +100,13 @@ func ResourceTfExport() *schema.Resource {
 			},
 			"export_as_hcl": {
 				Description: "Export the config as HCL.",
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     false,
+				ForceNew:    true,
+			},
+			"split_files_by_resource": {
+				Description: "Split export files by resource type. This will also split the terraform provider and variable declarations into their own files.",
 				Type:        schema.TypeBool,
 				Optional:    true,
 				Default:     false,
@@ -109,18 +126,34 @@ func ResourceTfExport() *schema.Resource {
 				Elem:        &schema.Schema{Type: schema.TypeString},
 				ForceNew:    true,
 			},
+			"enable_dependency_resolution": {
+				Description: "Adds a \"depends_on\" attribute to genesyscloud_flow resources with a list of resources that are referenced inside the flow configuration . This also resolves and exports all the dependent resources for any given resource.",
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     false,
+				ForceNew:    true,
+			},
+			"ignore_cyclic_deps": {
+				Description: "Ignore Cyclic Dependencies when building the flows and do not throw an error",
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     true,
+				ForceNew:    true,
+			},
+			"compress": {
+				Description: "Compress exported results using zip format",
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     false,
+				ForceNew:    true,
+			},
 		},
 	}
 }
 
-type resourceInfo struct {
-	State   *terraform.InstanceState
-	Name    string
-	Type    string
-	CtyType cty.Type
-}
-
 func createTfExport(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+	tfexporter_state.ActivateExporterState()
+
 	if _, ok := d.GetOk("include_filter_resources"); ok {
 		gre, _ := NewGenesysCloudResourceExporter(ctx, d, meta, IncludeResources)
 		diagErr := gre.Export()
@@ -128,7 +161,7 @@ func createTfExport(ctx context.Context, d *schema.ResourceData, meta interface{
 			return diagErr
 		}
 
-		d.SetId(gre.exportFilePath)
+		d.SetId(gre.exportDirPath)
 		return nil
 	}
 
@@ -139,62 +172,48 @@ func createTfExport(ctx context.Context, d *schema.ResourceData, meta interface{
 			return diagErr
 		}
 
-		d.SetId(gre.exportFilePath)
+		d.SetId(gre.exportDirPath)
 		return nil
 	}
 
 	//Dealing with the traditional resource
 	gre, _ := NewGenesysCloudResourceExporter(ctx, d, meta, LegacyInclude)
 	diagErr := gre.Export()
+
 	if diagErr != nil {
 		return diagErr
 	}
 
-	d.SetId(gre.exportFilePath)
+	d.SetId(gre.exportDirPath)
 
 	return nil
 }
 
+// If the output directory doesn't exist or empty, mark the resource for creation.
 func readTfExport(_ context.Context, d *schema.ResourceData, _ interface{}) diag.Diagnostics {
-	// If the output config file doesn't exist, mark the resource for creation.
 	path := d.Id()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		d.SetId("")
 		return nil
 	}
+	if isEmpty, diagErr := isDirEmpty(path); isEmpty || diagErr != nil {
+		d.SetId("")
+		return diagErr
+	}
+
 	return nil
 }
 
+// Delete everything (files and subdirectories) inside the export directory
+// not including the directory itself
 func deleteTfExport(_ context.Context, d *schema.ResourceData, _ interface{}) diag.Diagnostics {
-	configPath := d.Id()
-	if _, err := os.Stat(configPath); err == nil {
-		log.Printf("Deleting export config %s", configPath)
-		os.Remove(configPath)
+	exportPath := d.Id()
+	dir, err := os.ReadDir(exportPath)
+	if err != nil {
+		return diag.FromErr(err)
 	}
-
-	stateFile, _ := getFilePath(d, defaultTfStateFile)
-	if _, err := os.Stat(stateFile); err == nil {
-		log.Printf("Deleting export state %s", stateFile)
-		os.Remove(stateFile)
-	}
-
-	tfVarsFile, _ := getFilePath(d, defaultTfVarsFile)
-	if _, err := os.Stat(tfVarsFile); err == nil {
-		log.Printf("Deleting export vars %s", tfVarsFile)
-		os.Remove(tfVarsFile)
-	}
-
-	// delete left over folders e.g. prompt audio data
-	dir, _ := getFilePath(d, "")
-	contents, err := ioutil.ReadDir(dir)
-	if err == nil {
-		for _, c := range contents {
-			if c.IsDir() {
-				pathToLeftoverDir := path.Join(dir, c.Name())
-				log.Printf("Deleting leftover directory %s", pathToLeftoverDir)
-				_ = os.RemoveAll(pathToLeftoverDir)
-			}
-		}
+	for _, d := range dir {
+		os.RemoveAll(filepath.Join(exportPath, d.Name()))
 	}
 
 	return nil

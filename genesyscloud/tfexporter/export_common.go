@@ -2,9 +2,11 @@ package tfexporter
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
@@ -15,10 +17,14 @@ import (
 )
 
 const (
-	defaultTfJSONFile  = "genesyscloud.tf.json"
-	defaultTfHCLFile   = "genesyscloud.tf"
-	defaultTfVarsFile  = "terraform.tfvars"
-	defaultTfStateFile = "terraform.tfstate"
+	defaultTfJSONFile          = "genesyscloud.tf.json"
+	defaultTfHCLFile           = "genesyscloud.tf"
+	defaultTfHCLProviderFile   = "provider.tf"
+	defaultTfJSONProviderFile  = "provider.tf.json"
+	defaultTfHCLVariablesFile  = "variables.tf"
+	defaultTfJSONVariablesFile = "variables.tf.json"
+	defaultTfVarsFile          = "terraform.tfvars"
+	defaultTfStateFile         = "terraform.tfstate"
 )
 
 // Common Exporter interface to abstract away whether we are using HCL or JSON as our exporter
@@ -83,10 +89,34 @@ func FilterResourceByName(result resourceExporter.ResourceIDMetaMap, name string
 	return result
 }
 
+func FilterResourceById(result resourceExporter.ResourceIDMetaMap, name string, filter []string) resourceExporter.ResourceIDMetaMap {
+	if lists.SubStringInSlice(fmt.Sprintf("%v::", name), filter) {
+		names := make([]string, 0)
+		for _, f := range filter {
+			n := fmt.Sprintf("%v::", name)
+
+			if strings.Contains(f, n) {
+				names = append(names, strings.Replace(f, n, "", 1))
+			}
+		}
+		newResult := make(resourceExporter.ResourceIDMetaMap)
+		for _, name := range names {
+			for k, v := range result {
+				if k == name {
+					newResult[k] = v
+				}
+			}
+		}
+		return newResult
+	}
+
+	return result
+}
+
 func IncludeFilterResourceByRegex(result resourceExporter.ResourceIDMetaMap, name string, filter []string) resourceExporter.ResourceIDMetaMap {
 	newFilters := make([]string, 0)
 	for _, f := range filter {
-		if strings.Contains(f, "::") {
+		if strings.Contains(f, "::") && strings.Split(f, "::")[0] == name {
 			i := strings.Index(f, "::")
 			regexStr := f[i+2:]
 			newFilters = append(newFilters, regexStr)
@@ -99,11 +129,20 @@ func IncludeFilterResourceByRegex(result resourceExporter.ResourceIDMetaMap, nam
 		return result
 	}
 
+	sanitizer := resourceExporter.NewSanitizerProvider()
+
 	for _, pattern := range newFilters {
-		for k, _ := range result {
+		for k := range result {
 			match, _ := regexp.MatchString(pattern, result[k].Name)
 
+			// If name matches original name
 			if match {
+				newResourceMap[k] = result[k]
+			}
+
+			// If name matches sanitized name
+			sanitizedMatch, _ := regexp.MatchString(pattern, sanitizer.S.SanitizeResourceName(result[k].Name))
+			if sanitizedMatch {
 				newResourceMap[k] = result[k]
 			}
 		}
@@ -113,10 +152,9 @@ func IncludeFilterResourceByRegex(result resourceExporter.ResourceIDMetaMap, nam
 }
 
 func ExcludeFilterResourceByRegex(result resourceExporter.ResourceIDMetaMap, name string, filter []string) resourceExporter.ResourceIDMetaMap {
-
 	newFilters := make([]string, 0)
 	for _, f := range filter {
-		if strings.Contains(f, "::") {
+		if strings.Contains(f, "::") && strings.Split(f, "::")[0] == name {
 			i := strings.Index(f, "::")
 			regexStr := f[i+2:]
 			newFilters = append(newFilters, regexStr)
@@ -128,10 +166,12 @@ func ExcludeFilterResourceByRegex(result resourceExporter.ResourceIDMetaMap, nam
 	}
 
 	newResourceMap := make(resourceExporter.ResourceIDMetaMap)
+	sanitizer := resourceExporter.NewSanitizerProvider()
 
-	for k, _ := range result {
+	for k := range result {
 		for _, pattern := range newFilters {
 
+			// If name matches original name
 			match, _ := regexp.MatchString(pattern, result[k].Name)
 			if !match {
 				newResourceMap[k] = result[k]
@@ -139,8 +179,16 @@ func ExcludeFilterResourceByRegex(result resourceExporter.ResourceIDMetaMap, nam
 				delete(newResourceMap, k)
 				break
 			}
-		}
 
+			// If name matches sanitized name
+			sanitizedMatch, _ := regexp.MatchString(pattern, sanitizer.S.SanitizeResourceName(result[k].Name))
+			if !sanitizedMatch {
+				newResourceMap[k] = result[k]
+			} else {
+				delete(newResourceMap, k)
+				break
+			}
+		}
 	}
 	return newResourceMap
 }
@@ -183,29 +231,6 @@ func determineVarValue(s *schema.Schema) interface{} {
 	return nil
 }
 
-func resolveReference(refSettings *resourceExporter.RefAttrSettings, refID string, exporters map[string]*resourceExporter.ResourceExporter, exportingState bool) string {
-	if lists.ItemInSlice(refID, refSettings.AltValues) {
-		// This is not actually a reference to another object. Keep the value
-		return refID
-	}
-
-	if exporters[refSettings.RefType] != nil {
-		// Get the sanitized name from the ID returned as a reference expression
-		if idMetaMap := exporters[refSettings.RefType].SanitizedResourceMap; idMetaMap != nil {
-			if meta := idMetaMap[refID]; meta != nil && meta.Name != "" {
-				return fmt.Sprintf("${%s.%s.id}", refSettings.RefType, meta.Name)
-			}
-		}
-	}
-
-	if exportingState {
-		// Don't remove unmatched IDs when exporting state. This will keep existing config in an org
-		return refID
-	}
-	// No match found. Remove the value from the config since we do not have a reference to use
-	return ""
-}
-
 // Correct exported e164 number e.g. +(1) 111-222-333 --> +1111222333
 func sanitizeE164Number(number string) string {
 	charactersToRemove := []string{" ", "-", "(", ")"}
@@ -214,8 +239,57 @@ func sanitizeE164Number(number string) string {
 	}
 	return number
 }
+func sanitizeRrule(input string) string {
+	attributeRegex := map[string]*regexp.Regexp{
+		"INTERVAL":   regexp.MustCompile(`INTERVAL=([1-9][0-9]*|0?[1-9][0-9]*);`),
+		"BYMONTH":    regexp.MustCompile(`BYMONTH=(0?[1-9]|1[0-2]);`),
+		"BYMONTHDAY": regexp.MustCompile(`BYMONTHDAY=(0?[1-9]|[1-2][0-9]|3[0-1])$`),
+	}
 
+	// Iterate over attributes and modify the input string
+	for attributeName, regex := range attributeRegex {
+		input = regex.ReplaceAllStringFunc(input, func(match string) string {
+			return removeTrailingZeros(match, attributeName)
+		})
+	}
+	return input
+}
+
+func removeTrailingZeros(match, attributeName string) string {
+	pattern := `=(\d{1,2})`
+	re := regexp.MustCompile(pattern)
+	outputText := re.ReplaceAllStringFunc(match, func(match string) string {
+		numericPart := match[1:]
+		numericPart = fmt.Sprintf("%d", parseInt(numericPart))
+		return "=" + numericPart
+	})
+	return outputText
+}
+
+func parseInt(s string) int {
+	i, err := strconv.Atoi(s)
+	if err != nil {
+		panic(err)
+	}
+	return i
+}
+
+// Get a string path to the target export file
 func getFilePath(d *schema.ResourceData, filename string) (string, diag.Diagnostics) {
+	directory, diagErr := getDirPath(d)
+	if diagErr != nil {
+		return "", diagErr
+	}
+
+	path := filepath.Join(directory, filename)
+	if path == "" {
+		return "", diag.Errorf("Failed to create file path with directory %s", directory)
+	}
+	return path, nil
+}
+
+// Get a string path to the target export directory
+func getDirPath(d *schema.ResourceData) (string, diag.Diagnostics) {
 	directory := d.Get("directory").(string)
 	if strings.HasPrefix(directory, "~") {
 		homeDir, err := os.UserHomeDir()
@@ -228,9 +302,24 @@ func getFilePath(d *schema.ResourceData, filename string) (string, diag.Diagnost
 		return "", diag.FromErr(err)
 	}
 
-	path := filepath.Join(directory, filename)
-	if path == "" {
-		return "", diag.Errorf("Failed to create file path with directory %s", directory)
+	return directory, nil
+}
+
+// Checks if a directory path is empty
+func isDirEmpty(path string) (bool, diag.Diagnostics) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, diag.FromErr(err)
 	}
-	return path, nil
+	defer f.Close()
+
+	_, err = f.Readdirnames(1)
+	if err == io.EOF {
+		return true, nil
+	}
+	return false, diag.FromErr(err)
+}
+
+func createUnresolvedAttrKey(attr unresolvableAttributeInfo) string {
+	return fmt.Sprintf("%s_%s_%s", attr.ResourceType, attr.ResourceName, attr.Name)
 }

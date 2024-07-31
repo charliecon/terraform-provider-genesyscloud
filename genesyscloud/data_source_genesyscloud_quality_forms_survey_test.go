@@ -2,6 +2,8 @@ package genesyscloud
 
 import (
 	"fmt"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
 	"testing"
 
 	"github.com/google/uuid"
@@ -17,17 +19,17 @@ func TestAccDataSourceQualityFormsSurvey(t *testing.T) {
 	)
 
 	// Most basic survey form
-	surveyForm1 := surveyFormStruct{
-		name:     formName,
-		language: "en-US",
-		questionGroups: []surveyFormQuestionGroupStruct{
+	surveyForm1 := SurveyFormStruct{
+		Name:     formName,
+		Language: "en-US",
+		QuestionGroups: []SurveyFormQuestionGroupStruct{
 			{
-				name: "Test Question Group 1",
-				questions: []surveyFormQuestionStruct{
+				Name: "Test Question Group 1",
+				Questions: []SurveyFormQuestionStruct{
 					{
-						text:    "Was your problem solved?",
-						varType: "multipleChoiceQuestion",
-						answerOptions: []AnswerOptionStruct{
+						Text:    "Was your problem solved?",
+						VarType: "multipleChoiceQuestion",
+						AnswerOptions: []AnswerOptionStruct{
 							{
 								Text:  "Yes",
 								Value: 1,
@@ -39,9 +41,9 @@ func TestAccDataSourceQualityFormsSurvey(t *testing.T) {
 						},
 					},
 					{
-						text:    "Multiple Choice Question.",
-						varType: "multipleChoiceQuestion",
-						answerOptions: []AnswerOptionStruct{
+						Text:    "Multiple Choice Question.",
+						VarType: "multipleChoiceQuestion",
+						AnswerOptions: []AnswerOptionStruct{
 							{
 								Text:  "Option 1",
 								Value: 1,
@@ -62,11 +64,11 @@ func TestAccDataSourceQualityFormsSurvey(t *testing.T) {
 	}
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { TestAccPreCheck(t) },
-		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
+		PreCheck:          func() { util.TestAccPreCheck(t) },
+		ProviderFactories: provider.GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
-				Config: generateSurveyFormResource(
+				Config: GenerateSurveyFormResource(
 					formResource, &surveyForm1,
 				) + generateQualityFormsSurveyDataSource(
 					formDataResource,

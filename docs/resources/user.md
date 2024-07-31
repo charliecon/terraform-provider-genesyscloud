@@ -11,18 +11,24 @@ Genesys Cloud User
 ## API Usage
 The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Client has been granted the necessary scopes and permissions to perform these operations:
 
-* [POST /api/v2/users](https://developer.mypurecloud.com/api/rest/v2/users/#post-api-v2-users)
-* [GET /api/v2/users/{userId}](https://developer.mypurecloud.com/api/rest/v2/users/#get-api-v2-users--userId-)
-* [PATCH /api/v2/users/{userId}](https://developer.mypurecloud.com/api/rest/v2/users/#patch-api-v2-users--userId-)
-* [DELETE /api/v2/users/{userId}](https://developer.mypurecloud.com/api/rest/v2/users/#delete-api-v2-users--userId-)
-* [PUT /api/v2/users/{userId}/routingskills/bulk](https://developer.mypurecloud.com/api/rest/v2/users/#put-api-v2-users--userId--routingskills-bulk)
-* [DELETE /api/v2/users/{userId}/routinglanguages/{languageId}](https://developer.mypurecloud.com/api/rest/v2/users/#delete-api-v2-users--userId--routinglanguages--languageId-)
-* [PATCH /api/v2/users/{userId}/routinglanguages/bulk](https://developer.mypurecloud.com/api/rest/v2/users/#patch-api-v2-users--userId--routinglanguages-bulk)
-* [GET /api/v2/users/{userId}/routinglanguages](https://developer.mypurecloud.com/api/rest/v2/users/#get-api-v2-users--userId--routinglanguages)
-* [PUT /api/v2/users/{userId}/profileskills](https://developer.mypurecloud.com/api/rest/v2/users/#put-api-v2-users--userId--profileskills)
-* [GET /api/v2/routing/users/{userId}/utilization](https://developer.mypurecloud.com/api/rest/v2/users/#get-api-v2-routing-users--userId--utilization)
-* [PUT /api/v2/routing/users/{userId}/utilization](https://developer.mypurecloud.com/api/rest/v2/users/#put-api-v2-routing-users--userId--utilization)
-* [DELETE /api/v2/routing/users/{userId}/utilization](https://developer.mypurecloud.com/api/rest/v2/users/#delete-api-v2-routing-users--userId--utilization)
+- [POST /api/v2/users](https://developer.mypurecloud.com/api/rest/v2/users/#post-api-v2-users)
+- [GET /api/v2/users/{userId}](https://developer.mypurecloud.com/api/rest/v2/users/#get-api-v2-users--userId-)
+- [PATCH /api/v2/users/{userId}](https://developer.mypurecloud.com/api/rest/v2/users/#patch-api-v2-users--userId-)
+- [DELETE /api/v2/users/{userId}](https://developer.mypurecloud.com/api/rest/v2/users/#delete-api-v2-users--userId-)
+- [PUT /api/v2/users/{userId}/routingskills/bulk](https://developer.mypurecloud.com/api/rest/v2/users/#put-api-v2-users--userId--routingskills-bulk)
+- [DELETE /api/v2/users/{userId}/routinglanguages/{languageId}](https://developer.mypurecloud.com/api/rest/v2/users/#delete-api-v2-users--userId--routinglanguages--languageId-)
+- [PATCH /api/v2/users/{userId}/routinglanguages/bulk](https://developer.mypurecloud.com/api/rest/v2/users/#patch-api-v2-users--userId--routinglanguages-bulk)
+- [GET /api/v2/users/{userId}/routinglanguages](https://developer.mypurecloud.com/api/rest/v2/users/#get-api-v2-users--userId--routinglanguages)
+- [PUT /api/v2/users/{userId}/profileskills](https://developer.mypurecloud.com/api/rest/v2/users/#put-api-v2-users--userId--profileskills)
+- [GET /api/v2/routing/users/{userId}/utilization](https://developer.mypurecloud.com/api/rest/v2/users/#get-api-v2-routing-users--userId--utilization)
+- [PUT /api/v2/routing/users/{userId}/utilization](https://developer.mypurecloud.com/api/rest/v2/users/#put-api-v2-routing-users--userId--utilization)
+- [DELETE /api/v2/routing/users/{userId}/utilization](https://developer.mypurecloud.com/api/rest/v2/users/#delete-api-v2-routing-users--userId--utilization)
+
+---
+
+This resource has a feature toggle experimenting with new logic for returning phone addresses in the read action.
+You can enable this by setting the `USE_NEW_USER_ADDRESS_LOGIC` environmental variable before running `terraform apply`.
+
 
 ## Example Usage
 
@@ -92,6 +98,15 @@ resource "genesyscloud_user" "example_user" {
       maximum_capacity          = 4
       include_non_acd           = false
       interruptible_media_types = ["call", "chat"]
+    }
+    label_utilizations {
+      label_id         = genesyscloud_routing_utilization_label.red_label.id
+      maximum_capacity = 4
+    }
+    label_utilizations {
+      label_id               = genesyscloud_routing_utilization_label.blue_label.id
+      maximum_capacity       = 4
+      interrupting_label_ids = [genesyscloud_routing_utilization_label.red_label.id]
     }
   }
 }
@@ -203,6 +218,7 @@ Optional:
 - `callback` (List of Object) (see [below for nested schema](#nestedobjatt--routing_utilization--callback))
 - `chat` (List of Object) (see [below for nested schema](#nestedobjatt--routing_utilization--chat))
 - `email` (List of Object) (see [below for nested schema](#nestedobjatt--routing_utilization--email))
+- `label_utilizations` (List of Object) (see [below for nested schema](#nestedobjatt--routing_utilization--label_utilizations))
 - `message` (List of Object) (see [below for nested schema](#nestedobjatt--routing_utilization--message))
 
 <a id="nestedobjatt--routing_utilization--call"></a>
@@ -242,6 +258,16 @@ Optional:
 
 - `include_non_acd` (Boolean)
 - `interruptible_media_types` (Set of String)
+- `maximum_capacity` (Number)
+
+
+<a id="nestedobjatt--routing_utilization--label_utilizations"></a>
+### Nested Schema for `routing_utilization.label_utilizations`
+
+Optional:
+
+- `interrupting_label_ids` (Set of String)
+- `label_id` (String)
 - `maximum_capacity` (Number)
 
 

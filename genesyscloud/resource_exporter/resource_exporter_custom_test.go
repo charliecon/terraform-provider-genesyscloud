@@ -3,8 +3,9 @@ package resource_exporter
 import (
 	"testing"
 
-	"github.com/google/uuid"
 	"encoding/json"
+
+	"github.com/google/uuid"
 )
 
 type customMemberGroupTest struct {
@@ -16,8 +17,8 @@ type customMemberGroupTest struct {
 }
 
 type propertyGroupTest struct {
-	Skills        string
-	SkillName string
+	Skills               string
+	SkillName            string
 	ExporterResourceType string
 	ExpectedResult       string
 }
@@ -31,9 +32,9 @@ This is a unit test because it is just testing this single function without any 
 func TestAccExporterCustomMemberGroup(t *testing.T) {
 	teamID := uuid.NewString()
 	testResults := []*customMemberGroupTest{
-		&customMemberGroupTest{MemberGroupID: uuid.NewString(), MemberGroupType: "SKILLGROUP", GroupName: "test_skill_group_name", ExporterResourceType: "genesyscloud_routing_skill_group", ExpectedResult: "${genesyscloud_routing_skill_group.test_skill_group_name.id}"},
-		&customMemberGroupTest{MemberGroupID: uuid.NewString(), MemberGroupType: "GROUP", GroupName: "test_group_name", ExporterResourceType: "genesyscloud_group", ExpectedResult: "${genesyscloud_group.test_group_name.id}"},
-		&customMemberGroupTest{MemberGroupID: teamID, MemberGroupType: "TEAM", GroupName: "test_team_name", ExporterResourceType: "genesyscloud_team_NA", ExpectedResult: teamID},
+		{MemberGroupID: uuid.NewString(), MemberGroupType: "SKILLGROUP", GroupName: "test_skill_group_name", ExporterResourceType: "genesyscloud_routing_skill_group", ExpectedResult: "${genesyscloud_routing_skill_group.test_skill_group_name.id}"},
+		{MemberGroupID: uuid.NewString(), MemberGroupType: "GROUP", GroupName: "test_group_name", ExporterResourceType: "genesyscloud_group", ExpectedResult: "${genesyscloud_group.test_group_name.id}"},
+		{MemberGroupID: teamID, MemberGroupType: "TEAM", GroupName: "test_team_name", ExporterResourceType: "genesyscloud_team_NA", ExpectedResult: teamID},
 	}
 
 	for _, testResult := range testResults {
@@ -59,7 +60,7 @@ func TestAccExporterCustomMemberGroup(t *testing.T) {
 		}
 
 		//Invoke the resolver
-		err := MemberGroupsResolver(configMap, exporters)
+		err := MemberGroupsResolver(configMap, exporters, testResult.ExporterResourceType)
 
 		if err != nil && testResult.MemberGroupType != "TEAM" {
 			t.Errorf("Received an unexpected error while calling MemberGroupResolver:  %v", err)
@@ -67,7 +68,7 @@ func TestAccExporterCustomMemberGroup(t *testing.T) {
 
 		//The member_group_id should now be replaced by the expected out put with th
 		if configMap["member_group_id"].(string) != testResult.ExpectedResult {
-			t.Errorf("The member_group_id set in the config map was %v,but  wanted %v", configMap["member_group_id"], testResult.ExpectedResult)
+			t.Errorf("The member_group_id set in the config map was %v, but wanted %v", configMap["member_group_id"], testResult.ExpectedResult)
 		}
 	}
 
@@ -79,45 +80,45 @@ func TestRuleSetPropertyGroup(t *testing.T) {
 
 	jsonData, err := json.Marshal([]string{uuid})
 	if err != nil {
-			t.Errorf("Received an unexpected error converting json:  %v", err)
+		t.Errorf("Received an unexpected error converting json:  %v", err)
 	}
 	jsonString := string(jsonData)
 
 	testResults := []*propertyGroupTest{
-			&propertyGroupTest{Skills: jsonString, SkillName: "test_skill_name", ExporterResourceType: "genesyscloud_routing_skill", ExpectedResult: "[\"${genesyscloud_routing_skill.test_skill_name.id}\"]"},
+		{Skills: jsonString, SkillName: "test_skill_name", ExporterResourceType: "genesyscloud_routing_skill", ExpectedResult: "[\"${genesyscloud_routing_skill.test_skill_name.id}\"]"},
 	}
 
 	for _, testResult := range testResults {
-			configMap := make(map[string]interface{})
-			exporters := make(map[string]*ResourceExporter)
+		configMap := make(map[string]interface{})
+		exporters := make(map[string]*ResourceExporter)
 
-			//Make the config map object
-			configMap["skills"] = testResult.Skills
+		//Make the config map object
+		configMap["skills"] = testResult.Skills
 
-			//Create an exporter
-			skillSanitizedResourceMap := make(map[string]*ResourceMeta)
-			skillSanitizedResourceMap[uuid] = &ResourceMeta{Name: testResult.SkillName}
+		//Create an exporter
+		skillSanitizedResourceMap := make(map[string]*ResourceMeta)
+		skillSanitizedResourceMap[uuid] = &ResourceMeta{Name: testResult.SkillName}
 
-			firstResourceExport := &ResourceExporter{
-					SanitizedResourceMap: skillSanitizedResourceMap,
-			}
-			exporters[testResult.ExporterResourceType] = firstResourceExport
+		firstResourceExport := &ResourceExporter{
+			SanitizedResourceMap: skillSanitizedResourceMap,
+		}
+		exporters[testResult.ExporterResourceType] = firstResourceExport
 
-			//Pre-Check to make sure the member_group_id has been set to the GUID I have at the start of the test
-			if configMap["skills"] != testResult.Skills {
-					t.Errorf("The skills set in the config map was %v,but  wanted %v", configMap["skills"], testResult.Skills)
-			}
+		//Pre-Check to make sure the member_group_id has been set to the GUID I have at the start of the test
+		if configMap["skills"] != testResult.Skills {
+			t.Errorf("The skills set in the config map was %v,but  wanted %v", configMap["skills"], testResult.Skills)
+		}
 
-			//Invoke the resolver
-			err := RuleSetSkillPropertyResolver(configMap, exporters)
+		//Invoke the resolver
+		err := RuleSetSkillPropertyResolver(configMap, exporters, testResult.ExporterResourceType)
 
-			if err != nil {
-					t.Errorf("Received an unexpected error while calling RuleSetSkillPropertyResolver:  %v", err)
-			}
+		if err != nil {
+			t.Errorf("Received an unexpected error while calling RuleSetSkillPropertyResolver:  %v", err)
+		}
 
-			if configMap["skills"].(string) != testResult.ExpectedResult {
-					t.Errorf("The skills set in the config map was %v,but  wanted %v", configMap["skills"], testResult.ExpectedResult)
-			}
+		if configMap["skills"].(string) != testResult.ExpectedResult {
+			t.Errorf("The skills set in the config map was %v,but  wanted %v", configMap["skills"], testResult.ExpectedResult)
+		}
 	}
 
 }

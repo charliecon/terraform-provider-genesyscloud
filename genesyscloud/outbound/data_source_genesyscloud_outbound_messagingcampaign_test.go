@@ -4,22 +4,27 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
 	"testing"
+
+	obCallableTimeset "terraform-provider-genesyscloud/genesyscloud/outbound_callabletimeset"
+	obContactList "terraform-provider-genesyscloud/genesyscloud/outbound_contact_list"
+	obContactListFilter "terraform-provider-genesyscloud/genesyscloud/outbound_contactlistfilter"
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/mypurecloud/platform-client-sdk-go/v105/platformclientv2"
-	gcloud "terraform-provider-genesyscloud/genesyscloud" 
-	obContactList "terraform-provider-genesyscloud/genesyscloud/outbound_contact_list"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
 
-var trueValue = "true"
+var TrueValue = "true"
+
 /*
 This test can only pass in a test org because it requires an active provisioned sms phone number
 Endpoint `POST /api/v2/routing/sms/phonenumbers` creates an active/valid phone number in test orgs only.
 */
 func TestAccDataSourceOutboundMessagingCampaign(t *testing.T) {
-	
+
 	var (
 		resourceId          = "campaign"
 		dataSourceId        = "campaign_data"
@@ -36,26 +41,26 @@ func TestAccDataSourceOutboundMessagingCampaign(t *testing.T) {
 
 		callableTimeSetResourceId = "callable_time_set"
 		callableTimeSetName       = "Test CTS " + uuid.NewString()
-		callableTimeSetResource   = generateOutboundCallabletimeset(
+		callableTimeSetResource   = obCallableTimeset.GenerateOutboundCallabletimeset(
 			callableTimeSetResourceId,
 			callableTimeSetName,
-			generateCallableTimesBlock(
+			obCallableTimeset.GenerateCallableTimesBlock(
 				"Europe/Dublin",
-				generateTimeSlotsBlock("07:00:00", "18:00:00", "3"),
-				generateTimeSlotsBlock("09:30:00", "22:30:00", "5"),
+				obCallableTimeset.GenerateTimeSlotsBlock("07:00:00", "18:00:00", "3"),
+				obCallableTimeset.GenerateTimeSlotsBlock("09:30:00", "22:30:00", "5"),
 			),
 		)
 
 		contactListResource = obContactList.GenerateOutboundContactList(
 			contactListResourceId,
 			contactListName,
-			nullValue,
-			nullValue,
+			util.NullValue,
+			util.NullValue,
 			[]string{},
 			[]string{strconv.Quote(column1), strconv.Quote(column2)},
-			falseValue,
-			nullValue,
-			nullValue,
+			util.FalseValue,
+			util.NullValue,
+			util.NullValue,
 			obContactList.GeneratePhoneColumnsBlock(
 				column1,
 				"cell",
@@ -63,14 +68,14 @@ func TestAccDataSourceOutboundMessagingCampaign(t *testing.T) {
 			),
 		)
 
-		contactListFilterResource = generateOutboundContactListFilter(
+		contactListFilterResource = obContactListFilter.GenerateOutboundContactListFilter(
 			clfResourceId,
 			clfName,
 			"genesyscloud_outbound_contact_list."+contactListResourceId+".id",
 			"",
-			generateOutboundContactListFilterClause(
+			obContactListFilter.GenerateOutboundContactListFilterClause(
 				"",
-				generateOutboundContactListFilterPredicates(
+				obContactListFilter.GenerateOutboundContactListFilterPredicates(
 					column1,
 					"alphabetic",
 					"EQUALS",
@@ -82,26 +87,27 @@ func TestAccDataSourceOutboundMessagingCampaign(t *testing.T) {
 		)
 	)
 
-	config := platformclientv2.GetDefaultConfiguration()
-	err := config.AuthorizeClientCredentials(os.Getenv("GENESYSCLOUD_OAUTHCLIENT_ID"), os.Getenv("GENESYSCLOUD_OAUTHCLIENT_SECRET"))
-	if err != nil {
-		t.Errorf("error validating client credentials: %v", err)
+	if v := os.Getenv("GENESYSCLOUD_REGION"); v == "tca" {
+		smsConfigSenderSMSPhoneNumber = "+18159823725"
 	}
-	api := platformclientv2.NewRoutingApiWithConfig(config)
-	err = createRoutingSmsPhoneNumber(smsConfigSenderSMSPhoneNumber, api)
+
+	config, err := provider.AuthorizeSdk()
 	if err != nil {
-		t.Errorf("error creating sms phone number %s: %v", smsConfigSenderSMSPhoneNumber, err)
+		t.Errorf("failed to authorize client: %v", err)
 	}
-	defer func() {
-		_, err := api.DeleteRoutingSmsPhonenumber(smsConfigSenderSMSPhoneNumber)
+
+	if v := os.Getenv("GENESYSCLOUD_REGION"); v == "us-east-1" {
+		api := platformclientv2.NewRoutingApiWithConfig(config)
+		err = createRoutingSmsPhoneNumber(smsConfigSenderSMSPhoneNumber, api)
 		if err != nil {
-			t.Logf("error deleting phone number %s: %v", smsConfigSenderSMSPhoneNumber, err)
+			t.Errorf("error creating sms phone number %s: %v", smsConfigSenderSMSPhoneNumber, err)
 		}
-	}()
+		//Do not delete the smsPhoneNumber
+	}
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { gcloud.TestAccPreCheck(t) },
-		ProviderFactories:  gcloud.GetProviderFactories(providerResources, providerDataSources),
+		PreCheck:          func() { util.TestAccPreCheck(t) },
+		ProviderFactories: provider.GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				Config: contactListResource +
@@ -113,7 +119,7 @@ func TestAccDataSourceOutboundMessagingCampaign(t *testing.T) {
 						"genesyscloud_outbound_contact_list."+contactListResourceId+".id",
 						"",
 						"10",
-						falseValue,
+						util.FalseValue,
 						"genesyscloud_outbound_callabletimeset."+callableTimeSetResourceId+".id",
 						[]string{},
 						[]string{"genesyscloud_outbound_contactlistfilter." + clfResourceId + ".id"},
@@ -122,15 +128,15 @@ func TestAccDataSourceOutboundMessagingCampaign(t *testing.T) {
 							column1,
 							smsConfigSenderSMSPhoneNumber,
 						),
-						generateOutboundMessagingCampaignContactSort(
+						GenerateOutboundMessagingCampaignContactSort(
 							column1,
 							"",
 							"",
 						),
-						generateOutboundMessagingCampaignContactSort(
+						GenerateOutboundMessagingCampaignContactSort(
 							column2,
 							"DESC",
-							trueValue,
+							TrueValue,
 						),
 					) + generateOutboundMessagingCampaignDataSource(
 					dataSourceId,

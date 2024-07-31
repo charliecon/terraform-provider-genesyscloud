@@ -4,7 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
+	"terraform-provider-genesyscloud/genesyscloud/util/constants"
+	"terraform-provider-genesyscloud/genesyscloud/validators"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 
 	"terraform-provider-genesyscloud/genesyscloud/util/stringmap"
 
@@ -13,13 +19,13 @@ import (
 
 	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/mypurecloud/platform-client-sdk-go/v105/platformclientv2"
 	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
 
 var (
@@ -52,6 +58,13 @@ var (
 			Type:        schema.TypeSet,
 			Optional:    true,
 			Elem:        outcomeProbabilityConditionResource,
+			Deprecated:  "Use trigger_with_outcome_quantile_conditions attribute instead.",
+		},
+		"trigger_with_outcome_quantile_conditions": {
+			Description: "Quantile conditions for outcomes that must be satisfied to trigger the action map.",
+			Type:        schema.TypeSet,
+			Optional:    true,
+			Elem:        outcomeQuantileConditionResource,
 		},
 		"page_url_conditions": {
 			Description: "URL conditions that a page must match for web actions to be displayable.",
@@ -97,13 +110,13 @@ var (
 			Description:      "Timestamp at which the action map is scheduled to start firing. Date time is represented as an ISO-8601 string without a timezone. For example: 2006-01-02T15:04:05.000000.",
 			Type:             schema.TypeString,
 			Required:         true, // Now is the default value for this field. Better to make it required.
-			ValidateDiagFunc: validateLocalDateTimes,
+			ValidateDiagFunc: validators.ValidateLocalDateTimes,
 		},
 		"end_date": {
 			Description:      "Timestamp at which the action map is scheduled to stop firing. Date time is represented as an ISO-8601 string without a timezone. For example: 2006-01-02T15:04:05.000000.",
 			Type:             schema.TypeString,
 			Optional:         true,
-			ValidateDiagFunc: validateLocalDateTimes,
+			ValidateDiagFunc: validators.ValidateLocalDateTimes,
 		},
 	}
 
@@ -128,15 +141,16 @@ var (
 				ValidateFunc: validation.StringInSlice([]string{"containsAll", "containsAny", "notContainsAll", "notContainsAny", "equal", "notEqual", "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual", "startsWith", "endsWith"}, false),
 			},
 			"stream_type": {
-				Description:  "The stream type for which this condition can be satisfied. Valid values: Web, Custom, Conversation.",
+				Description:  "The stream type for which this condition can be satisfied. Valid values: Web, App.",
 				Type:         schema.TypeString,
 				Required:     true,
-				ValidateFunc: validation.StringInSlice([]string{"Web", "Custom", "Conversation"}, false),
+				ValidateFunc: validation.StringInSlice([]string{"Web", "App" /*,"Custom", "Conversation" */}, false), // Custom and Conversation seem not to be supported by the API despite the documentation (DEVENGSD-607)
 			},
 			"session_type": {
-				Description: "The session type for which this condition can be satisfied.",
-				Type:        schema.TypeString,
-				Required:    true,
+				Description:  "The session type for which this condition can be satisfied. Valid values: web, app.",
+				Type:         schema.TypeString,
+				Required:     true,
+				ValidateFunc: validation.StringInSlice([]string{"web", "app"}, false), // custom value seems not to be supported by the API despite the documentation
 			},
 			"event_name": {
 				Description: "The name of the event for which this condition can be satisfied.",
@@ -160,6 +174,26 @@ var (
 			},
 			"probability": {
 				Description: "Additional probability condition, where if set, the action map will trigger if the current outcome probability is lower or equal to the value.",
+				Type:        schema.TypeFloat,
+				Optional:    true,
+			},
+		},
+	}
+
+	outcomeQuantileConditionResource = &schema.Resource{
+		Schema: map[string]*schema.Schema{
+			"outcome_id": {
+				Description: "The outcome ID.",
+				Type:        schema.TypeString,
+				Required:    true,
+			},
+			"max_quantile_threshold": {
+				Description: "This Outcome Quantile Condition is met when sessionMaxQuantile of the OutcomeScore is above this value, (unless fallbackQuantile is set). Range 0.00-1.00",
+				Type:        schema.TypeFloat,
+				Required:    true,
+			},
+			"fallback_quantile_threshold": {
+				Description: "If set, this Condition is met when max_quantile_threshold is met, AND the current quantile of the OutcomeScore is below this fallback_quantile_threshold. Range 0.00-1.00",
 				Type:        schema.TypeFloat,
 				Optional:    true,
 			},
@@ -313,7 +347,7 @@ var (
 				Description:      "Custom fields defined in the schema referenced by the open action type selected.",
 				Type:             schema.TypeString,
 				Optional:         true,
-				DiffSuppressFunc: suppressEquivalentJsonDiffs,
+				DiffSuppressFunc: util.SuppressEquivalentJsonDiffs,
 			},
 		},
 	}
@@ -356,9 +390,9 @@ func getAllJourneyActionMaps(_ context.Context, clientConfig *platformclientv2.C
 	pageCount := 1 // Needed because of broken journey common paging
 	for pageNum := 1; pageNum <= pageCount; pageNum++ {
 		const pageSize = 100
-		actionMaps, _, getErr := journeyApi.GetJourneyActionmaps(pageNum, pageSize, "", "", "", nil, nil, "")
+		actionMaps, resp, getErr := journeyApi.GetJourneyActionmaps(pageNum, pageSize, "", "", "", nil, nil, "")
 		if getErr != nil {
-			return nil, diag.Errorf("Failed to get page of journey action maps: %v", getErr)
+			return nil, util.BuildAPIDiagnosticError("genesyscloud_journey_action_map", fmt.Sprintf("failed to get page of journey action maps error: %s", getErr), resp)
 		}
 
 		if actionMaps.Entities == nil || len(*actionMaps.Entities) == 0 {
@@ -377,10 +411,11 @@ func getAllJourneyActionMaps(_ context.Context, clientConfig *platformclientv2.C
 
 func JourneyActionMapExporter() *resourceExporter.ResourceExporter {
 	return &resourceExporter.ResourceExporter{
-		GetResourcesFunc: GetAllWithPooledClient(getAllJourneyActionMaps),
+		GetResourcesFunc: provider.GetAllWithPooledClient(getAllJourneyActionMaps),
 		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"trigger_with_segments":                                             {RefType: "genesyscloud_journey_segment"},
 			"trigger_with_outcome_probability_conditions.outcome_id":            {RefType: "genesyscloud_journey_outcome"},
+			"trigger_with_outcome_quantile_conditions.outcome_id":               {RefType: "genesyscloud_journey_outcome"},
 			"action.architect_flow_fields.architect_flow_id":                    {RefType: "genesyscloud_flow"},
 			"action_map_schedule_groups.action_map_schedule_group_id":           {RefType: "genesyscloud_architect_schedulegroups"},
 			"action_map_schedule_groups.emergency_action_map_schedule_group_id": {RefType: "genesyscloud_architect_schedulegroups"},
@@ -392,10 +427,10 @@ func JourneyActionMapExporter() *resourceExporter.ResourceExporter {
 func ResourceJourneyActionMap() *schema.Resource {
 	return &schema.Resource{
 		Description:   "Genesys Cloud Journey Action Map",
-		CreateContext: CreateWithPooledClient(createJourneyActionMap),
-		ReadContext:   ReadWithPooledClient(readJourneyActionMap),
-		UpdateContext: UpdateWithPooledClient(updateJourneyActionMap),
-		DeleteContext: DeleteWithPooledClient(deleteJourneyActionMap),
+		CreateContext: provider.CreateWithPooledClient(createJourneyActionMap),
+		ReadContext:   provider.ReadWithPooledClient(readJourneyActionMap),
+		UpdateContext: provider.UpdateWithPooledClient(updateJourneyActionMap),
+		DeleteContext: provider.DeleteWithPooledClient(deleteJourneyActionMap),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -405,15 +440,15 @@ func ResourceJourneyActionMap() *schema.Resource {
 }
 
 func createJourneyActionMap(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	journeyApi := platformclientv2.NewJourneyApiWithConfig(sdkConfig)
 	actionMap := buildSdkActionMap(d)
 
 	log.Printf("Creating journey action map %s", *actionMap.DisplayName)
 	result, resp, err := journeyApi.PostJourneyActionmaps(*actionMap)
 	if err != nil {
-		input, _ := interfaceToJson(*actionMap)
-		return diag.Errorf("failed to create journey action map %s: %s\n(input: %+v)\n(resp: %s)", *actionMap.DisplayName, err, input, GetBody(resp))
+		input, _ := util.InterfaceToJson(*actionMap)
+		return util.BuildAPIDiagnosticError("genesyscloud_journey_action_map", fmt.Sprintf("failed to create journey action map %s: %s\n(input: %+v)", *actionMap.DisplayName, err, input), resp)
 	}
 
 	d.SetId(*result.Id)
@@ -423,45 +458,45 @@ func createJourneyActionMap(ctx context.Context, d *schema.ResourceData, meta in
 }
 
 func readJourneyActionMap(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	journeyApi := platformclientv2.NewJourneyApiWithConfig(sdkConfig)
+	cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceJourneyActionMap(), constants.DefaultConsistencyChecks, "genesyscloud_journey_action_map")
 
 	log.Printf("Reading journey action map %s", d.Id())
-	return WithRetriesForRead(ctx, d, func() *resource.RetryError {
+	return util.WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		actionMap, resp, getErr := journeyApi.GetJourneyActionmap(d.Id())
 		if getErr != nil {
-			if IsStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("failed to read journey action map %s: %s", d.Id(), getErr))
+			if util.IsStatus404(resp) {
+				return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_journey_action_map", fmt.Sprintf("failed to read journey action map %s | error: %s", d.Id(), getErr), resp))
 			}
-			return resource.NonRetryableError(fmt.Errorf("failed to read journey action map %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_journey_action_map", fmt.Sprintf("failed to read journey action map %s | error: %s", d.Id(), getErr), resp))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceJourneyActionMap())
 		flattenActionMap(d, actionMap)
 
 		log.Printf("Read journey action map %s %s", d.Id(), *actionMap.DisplayName)
-		return cc.CheckState()
+		return cc.CheckState(d)
 	})
 }
 
 func updateJourneyActionMap(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	journeyApi := platformclientv2.NewJourneyApiWithConfig(sdkConfig)
 	patchActionMap := buildSdkPatchActionMap(d)
 
 	log.Printf("Updating journey action map %s", d.Id())
-	diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	diagErr := util.RetryWhen(util.IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		// Get current journey action map version
 		actionMap, resp, getErr := journeyApi.GetJourneyActionmap(d.Id())
 		if getErr != nil {
-			return resp, diag.Errorf("Failed to read current journey action map %s: %s", d.Id(), getErr)
+			return resp, util.BuildAPIDiagnosticError("genesyscloud_journey_action_map", fmt.Sprintf("failed to read journey action map %s error: %s", d.Id(), getErr), resp)
 		}
 
 		patchActionMap.Version = actionMap.Version
 		_, resp, patchErr := journeyApi.PatchJourneyActionmap(d.Id(), *patchActionMap)
 		if patchErr != nil {
-			input, _ := interfaceToJson(*patchActionMap)
-			return resp, diag.Errorf("Error updating journey action map %s: %s\n(input: %+v)\n(resp: %s)", *patchActionMap.DisplayName, patchErr, input, GetBody(resp))
+			input, _ := util.InterfaceToJson(*patchActionMap)
+			return resp, util.BuildAPIDiagnosticError("genesyscloud_journey_action_map", fmt.Sprintf("Error updating journey action map %s: %s\n(input: %+v)", *patchActionMap.DisplayName, patchErr, input), resp)
 		}
 		return resp, nil
 	})
@@ -476,26 +511,26 @@ func updateJourneyActionMap(ctx context.Context, d *schema.ResourceData, meta in
 func deleteJourneyActionMap(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	displayName := d.Get("display_name").(string)
 
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	journeyApi := platformclientv2.NewJourneyApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting journey action map with display name %s", displayName)
-	if _, err := journeyApi.DeleteJourneyActionmap(d.Id()); err != nil {
-		return diag.Errorf("Failed to delete journey action map with display name %s: %s", displayName, err)
+	if resp, err := journeyApi.DeleteJourneyActionmap(d.Id()); err != nil {
+		return util.BuildAPIDiagnosticError("genesyscloud_journey_action_map", fmt.Sprintf("failed to delete journey action map with display name %s error: %s", displayName, err), resp)
 	}
 
-	return WithRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return util.WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		_, resp, err := journeyApi.GetJourneyActionmap(d.Id())
 		if err != nil {
-			if IsStatus404(resp) {
+			if util.IsStatus404(resp) {
 				// journey action map deleted
 				log.Printf("Deleted journey action map %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("error deleting journey action map %s: %s", d.Id(), err))
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_journey_action_map", fmt.Sprintf("error deleting journey action map %s | error: %s", d.Id(), err), resp))
 		}
 
-		return resource.RetryableError(fmt.Errorf("journey action map %s still exists", d.Id()))
+		return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_journey_action_map", fmt.Sprintf("journey action map %s still exists", d.Id()), resp))
 	})
 }
 
@@ -505,6 +540,7 @@ func flattenActionMap(d *schema.ResourceData, actionMap *platformclientv2.Action
 	d.Set("trigger_with_segments", lists.StringListToSetOrNil(actionMap.TriggerWithSegments))
 	resourcedata.SetNillableValue(d, "trigger_with_event_conditions", lists.FlattenList(actionMap.TriggerWithEventConditions, flattenEventCondition))
 	resourcedata.SetNillableValue(d, "trigger_with_outcome_probability_conditions", lists.FlattenList(actionMap.TriggerWithOutcomeProbabilityConditions, flattenOutcomeProbabilityCondition))
+	resourcedata.SetNillableValue(d, "trigger_with_outcome_quantile_conditions", lists.FlattenList(actionMap.TriggerWithOutcomeQuantileConditions, flattenOutcomeQuantileCondition))
 	resourcedata.SetNillableValue(d, "page_url_conditions", lists.FlattenList(actionMap.PageUrlConditions, flattenUrlCondition))
 	d.Set("activation", lists.FlattenAsList(actionMap.Activation, flattenActivation))
 	d.Set("weight", *actionMap.Weight)
@@ -521,6 +557,7 @@ func buildSdkActionMap(actionMap *schema.ResourceData) *platformclientv2.Actionm
 	triggerWithSegments := lists.BuildSdkStringList(actionMap, "trigger_with_segments")
 	triggerWithEventConditions := resourcedata.BuildSdkList(actionMap, "trigger_with_event_conditions", buildSdkEventCondition)
 	triggerWithOutcomeProbabilityConditions := resourcedata.BuildSdkList(actionMap, "trigger_with_outcome_probability_conditions", buildSdkOutcomeProbabilityCondition)
+	triggerWithOutcomeQuantileConditions := resourcedata.BuildSdkList(actionMap, "trigger_with_outcome_quantile_conditions", buildSdkOutcomeQuantileCondition)
 	pageUrlConditions := resourcedata.BuildSdkList(actionMap, "page_url_conditions", buildSdkUrlCondition)
 	activation := resourcedata.BuildSdkListFirstElement(actionMap, "activation", buildSdkActivation, true)
 	weight := actionMap.Get("weight").(int)
@@ -536,6 +573,7 @@ func buildSdkActionMap(actionMap *schema.ResourceData) *platformclientv2.Actionm
 		TriggerWithSegments:                     triggerWithSegments,
 		TriggerWithEventConditions:              triggerWithEventConditions,
 		TriggerWithOutcomeProbabilityConditions: triggerWithOutcomeProbabilityConditions,
+		TriggerWithOutcomeQuantileConditions:    triggerWithOutcomeQuantileConditions,
 		PageUrlConditions:                       pageUrlConditions,
 		Activation:                              activation,
 		Weight:                                  &weight,
@@ -553,6 +591,7 @@ func buildSdkPatchActionMap(patchActionMap *schema.ResourceData) *platformclient
 	triggerWithSegments := lists.BuildSdkStringList(patchActionMap, "trigger_with_segments")
 	triggerWithEventConditions := lists.NilToEmptyList(resourcedata.BuildSdkList(patchActionMap, "trigger_with_event_conditions", buildSdkEventCondition))
 	triggerWithOutcomeProbabilityConditions := lists.NilToEmptyList(resourcedata.BuildSdkList(patchActionMap, "trigger_with_outcome_probability_conditions", buildSdkOutcomeProbabilityCondition))
+	triggerWithOutcomeQuantileConditions := lists.NilToEmptyList(resourcedata.BuildSdkList(patchActionMap, "trigger_with_outcome_quantile_conditions", buildSdkOutcomeQuantileCondition))
 	pageUrlConditions := lists.NilToEmptyList(resourcedata.BuildSdkList(patchActionMap, "page_url_conditions", buildSdkUrlCondition))
 	activation := resourcedata.BuildSdkListFirstElement(patchActionMap, "activation", buildSdkActivation, true)
 	weight := patchActionMap.Get("weight").(int)
@@ -568,6 +607,7 @@ func buildSdkPatchActionMap(patchActionMap *schema.ResourceData) *platformclient
 	sdkPatchActionMap.SetField("TriggerWithSegments", triggerWithSegments)
 	sdkPatchActionMap.SetField("TriggerWithEventConditions", triggerWithEventConditions)
 	sdkPatchActionMap.SetField("TriggerWithOutcomeProbabilityConditions", triggerWithOutcomeProbabilityConditions)
+	sdkPatchActionMap.SetField("TriggerWithOutcomeQuantileConditions", triggerWithOutcomeQuantileConditions)
 	sdkPatchActionMap.SetField("PageUrlConditions", pageUrlConditions)
 	sdkPatchActionMap.SetField("Activation", activation)
 	sdkPatchActionMap.SetField("Weight", &weight)
@@ -626,6 +666,27 @@ func buildSdkOutcomeProbabilityCondition(outcomeProbabilityCondition map[string]
 		OutcomeId:          &outcomeId,
 		MaximumProbability: maximumProbability,
 		Probability:        probability,
+	}
+}
+
+func flattenOutcomeQuantileCondition(outcomeQuantileCondition *platformclientv2.Outcomequantilecondition) map[string]interface{} {
+	outcomeQuantileConditionMap := make(map[string]interface{})
+	outcomeQuantileConditionMap["outcome_id"] = *outcomeQuantileCondition.OutcomeId
+	outcomeQuantileConditionMap["max_quantile_threshold"] = *typeconv.Float32to64(outcomeQuantileCondition.MaxQuantileThreshold)
+	stringmap.SetValueIfNotNil(outcomeQuantileConditionMap, "fallback_quantile_threshold", typeconv.Float32to64(outcomeQuantileCondition.FallbackQuantileThreshold))
+	return outcomeQuantileConditionMap
+}
+
+func buildSdkOutcomeQuantileCondition(outcomeQuantileCondition map[string]interface{}) *platformclientv2.Outcomequantilecondition {
+	outcomeId := outcomeQuantileCondition["outcome_id"].(string)
+	maxQuantileThreshold64 := outcomeQuantileCondition["max_quantile_threshold"].(float64)
+	maxQuantileThreshold := typeconv.Float64to32(&maxQuantileThreshold64)
+	fallbackQuantileThreshold := typeconv.Float64to32(stringmap.GetNonDefaultValue[float64](outcomeQuantileCondition, "fallback_quantile_threshold"))
+
+	return &platformclientv2.Outcomequantilecondition{
+		OutcomeId:                 &outcomeId,
+		MaxQuantileThreshold:      maxQuantileThreshold,
+		FallbackQuantileThreshold: fallbackQuantileThreshold,
 	}
 }
 
@@ -810,7 +871,7 @@ func flattenOpenActionFields(openActionFields *platformclientv2.Openactionfields
 	architectFlowFieldsMap := make(map[string]interface{})
 	architectFlowFieldsMap["open_action"] = lists.FlattenAsList(openActionFields.OpenAction, flattenOpenActionDomainEntityRef)
 	if openActionFields.ConfigurationFields != nil {
-		jsonString, err := interfaceToJson(openActionFields.ConfigurationFields)
+		jsonString, err := util.InterfaceToJson(openActionFields.ConfigurationFields)
 		if err != nil {
 			log.Printf("Error marshalling '%s': %v", "configuration_fields", err)
 		}
@@ -827,7 +888,7 @@ func buildSdkOpenActionFields(openActionFieldsMap map[string]interface{}) *platf
 
 	configurationFieldsString := stringmap.GetNonDefaultValue[string](openActionFieldsMap, "configuration_fields")
 	if configurationFieldsString != nil {
-		configurationFieldsInterface, err := jsonStringToInterface(*configurationFieldsString)
+		configurationFieldsInterface, err := util.JsonStringToInterface(*configurationFieldsString)
 		if err != nil {
 			log.Printf("Error unmarshalling '%s': %v", "configuration_fields", err)
 		}

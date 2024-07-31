@@ -1,25 +1,24 @@
 package outbound_attempt_limit
 
 import (
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	gcloud "terraform-provider-genesyscloud/genesyscloud" 
 )
 
+func TestAccDataSourceOutboundAttemptLimit(t *testing.T) {
 
-func TestAccDataSourceAttemptLimit(t *testing.T) {
-	
 	var (
 		resourceId       = "attempt_limit"
 		attemptLimitName = "Test Limit " + uuid.NewString()
 		dataSourceId     = "attempt_limit_data"
-		
 	)
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { gcloud.TestAccPreCheck(t) },
-		ProviderFactories:  gcloud.GetProviderFactories(providerResources, providerDataSources),
+		PreCheck:          func() { util.TestAccPreCheck(t) },
+		ProviderFactories: provider.GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				Config: GenerateAttemptLimitResource(

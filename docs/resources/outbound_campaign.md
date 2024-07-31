@@ -20,6 +20,9 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
+# When exporting outbound campaigns, any campaign with campaign_status = "stopping" will be
+# given 5 minutes to stop. If it does not stop in that time it will not be exported.
+# This is to avoid the exporter crashing when trying to export a campaign in the stopping state
 resource "genesyscloud_outbound_campaign" "campaign" {
   name                          = "Example Voice Campaign"
   dialing_mode                  = "agentless"
@@ -62,6 +65,7 @@ resource "genesyscloud_outbound_campaign" "campaign" {
 - `dnc_list_ids` (List of String) DncLists for this Campaign to check before placing a call.
 - `dynamic_contact_queueing_settings` (Block List, Max: 1) Settings for dynamic queueing of contacts. (see [below for nested schema](#nestedblock--dynamic_contact_queueing_settings))
 - `edge_group_id` (String) The EdgeGroup that will place the calls. Required for all dialing modes except preview.
+- `max_calls_per_agent` (Number) The maximum number of calls that can be placed per agent on this campaign.
 - `no_answer_timeout` (Number) How long to wait before dispositioning a call as 'no-answer'. Default 30 seconds. Only applicable to non-preview campaigns.
 - `outbound_line_count` (Number) The number of outbound lines to be concurrently dialed. Only applicable to non-preview campaigns; only required for agentless.
 - `preview_time_out_seconds` (Number) The number of seconds before a call will be automatically placed on a preview. A value of 0 indicates no automatic placement of calls. Only applicable to preview campaigns.

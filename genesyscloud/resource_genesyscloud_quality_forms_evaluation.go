@@ -5,22 +5,33 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/tfexporter_state"
+	"terraform-provider-genesyscloud/genesyscloud/util"
+	"terraform-provider-genesyscloud/genesyscloud/util/constants"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 
 	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
 
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	"terraform-provider-genesyscloud/genesyscloud/util/lists"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/mypurecloud/platform-client-sdk-go/v105/platformclientv2"
-	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
-	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
 
 var (
 	evaluationFormQuestionGroup = &schema.Resource{
 		Schema: map[string]*schema.Schema{
+			"id": {
+				Description: "ID of the question group.",
+				Type:        schema.TypeString,
+				Computed:    true,
+			},
 			"name": {
 				Description: "Name of display question in question group.",
 				Type:        schema.TypeString,
@@ -74,6 +85,11 @@ var (
 
 	evaluationFormQuestion = &schema.Resource{
 		Schema: map[string]*schema.Schema{
+			"id": {
+				Description: "ID of the question.",
+				Type:        schema.TypeString,
+				Computed:    true,
+			},
 			"text": {
 				Description: "Individual question",
 				Type:        schema.TypeString,
@@ -108,7 +124,7 @@ var (
 				Type:        schema.TypeList,
 				Required:    true,
 				MinItems:    2,
-				Elem:        evaluationFormAnswerOptions,
+				Elem:        evaluationFormAnswerOptionsResource,
 			},
 			"is_kill": {
 				Description: "True if the question is a fatal question",
@@ -142,8 +158,13 @@ var (
 		},
 	}
 
-	evaluationFormAnswerOptions = &schema.Resource{
+	evaluationFormAnswerOptionsResource = &schema.Resource{
 		Schema: map[string]*schema.Schema{
+			"id": {
+				Type:        schema.TypeString,
+				Description: "The ID for the answer option.",
+				Computed:    true,
+			},
 			"text": {
 				Type:     schema.TypeString,
 				Required: true,
@@ -162,9 +183,9 @@ func getAllEvaluationForms(_ context.Context, clientConfig *platformclientv2.Con
 
 	for pageNum := 1; ; pageNum++ {
 		const pageSize = 100
-		evaluationForms, _, getErr := qualityAPI.GetQualityFormsEvaluations(pageSize, pageNum, "", "", "", "", "", "")
+		evaluationForms, resp, getErr := qualityAPI.GetQualityFormsEvaluations(pageSize, pageNum, "", "", "", "", "", "")
 		if getErr != nil {
-			return nil, diag.Errorf("Failed to get page of evaluation forms %v", getErr)
+			return nil, util.BuildAPIDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to get page of evaluation forms error: %s", getErr), resp)
 		}
 
 		if evaluationForms.Entities == nil || len(*evaluationForms.Entities) == 0 {
@@ -181,19 +202,24 @@ func getAllEvaluationForms(_ context.Context, clientConfig *platformclientv2.Con
 
 func EvaluationFormExporter() *resourceExporter.ResourceExporter {
 	return &resourceExporter.ResourceExporter{
-		GetResourcesFunc: GetAllWithPooledClient(getAllEvaluationForms),
+		GetResourcesFunc: provider.GetAllWithPooledClient(getAllEvaluationForms),
 		RefAttrs:         map[string]*resourceExporter.RefAttrSettings{}, // No references
 		AllowZeroValues:  []string{"question_groups.questions.answer_options.value", "question_groups.weight"},
+		ExcludedAttributes: []string{
+			"question_groups.id",
+			"question_groups.questions.id",
+			"question_groups.questions.answer_options.id",
+		},
 	}
 }
 
 func ResourceEvaluationForm() *schema.Resource {
 	return &schema.Resource{
 		Description:   "Genesys Cloud Evaluation Forms",
-		CreateContext: CreateWithPooledClient(createEvaluationForm),
-		ReadContext:   ReadWithPooledClient(readEvaluationForm),
-		UpdateContext: UpdateWithPooledClient(updateEvaluationForm),
-		DeleteContext: DeleteWithPooledClient(deleteEvaluationForm),
+		CreateContext: provider.CreateWithPooledClient(createEvaluationForm),
+		ReadContext:   provider.ReadWithPooledClient(readEvaluationForm),
+		UpdateContext: provider.UpdateWithPooledClient(updateEvaluationForm),
+		DeleteContext: provider.DeleteWithPooledClient(deleteEvaluationForm),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -205,7 +231,7 @@ func ResourceEvaluationForm() *schema.Resource {
 				Required:    true,
 			},
 			"published": {
-				Description: "Specifies if the evalutaion form is published.",
+				Description: "Specifies if the evaluation form is published.",
 				Type:        schema.TypeBool,
 				Optional:    true,
 				Default:     false,
@@ -225,21 +251,16 @@ func createEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 	name := d.Get("name").(string)
 	published := d.Get("published").(bool)
 
-	questionGroups, qgErr := buildSdkQuestionGroups(d)
-	if qgErr != nil {
-		return qgErr
-	}
-
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
 
 	log.Printf("Creating Evaluation Form %s", name)
-	form, _, err := qualityAPI.PostQualityFormsEvaluations(platformclientv2.Evaluationform{
+	form, resp, err := qualityAPI.PostQualityFormsEvaluations(platformclientv2.Evaluationform{
 		Name:           &name,
-		QuestionGroups: questionGroups,
+		QuestionGroups: buildSdkQuestionGroups(d),
 	})
 	if err != nil {
-		return diag.Errorf("Failed to create evaluation form %s: %s", name, err)
+		return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to create evaluation form %s error: %s", name, err), resp)
 	}
 
 	// Make sure form is properly created
@@ -249,12 +270,12 @@ func createEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 
 	// Publishing
 	if published {
-		_, _, err := qualityAPI.PostQualityPublishedformsEvaluations(platformclientv2.Publishform{
+		_, resp, err := qualityAPI.PostQualityPublishedformsEvaluations(platformclientv2.Publishform{
 			Id:        formId,
 			Published: &published,
 		})
 		if err != nil {
-			return diag.Errorf("Failed to publish evaluation form %s", name)
+			return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to publish evaluation form %s error: %s", name, err), resp)
 		}
 	}
 
@@ -265,31 +286,48 @@ func createEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 }
 
 func readEvaluationForm(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
-	log.Printf("Reading evaluation form %s", d.Id())
+	cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceEvaluationForm(), constants.DefaultConsistencyChecks, "genesyscloud_quality_forms_evaluation")
 
-	return WithRetriesForRead(ctx, d, func() *resource.RetryError {
+	log.Printf("Reading evaluation form %s", d.Id())
+	return util.WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		evaluationForm, resp, getErr := qualityAPI.GetQualityFormsEvaluation(d.Id())
 		if getErr != nil {
-			if IsStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read evaluation form %s: %s", d.Id(), getErr))
+			if util.IsStatus404(resp) {
+				return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to read evaluation form %s | error: %s", d.Id(), getErr), resp))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read evaluation form %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to read evaluation form %s | error: %s", d.Id(), getErr), resp))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceEvaluationForm())
+		// During an export, Retrieve a list of any published versions of the evaluation form
+		// If there are published versions, published will be set to true
+		if tfexporter_state.IsExporterActive() {
+			publishedVersions, resp, err := qualityAPI.GetQualityFormsEvaluationsBulkContexts([]string{*evaluationForm.ContextId})
+			if err != nil {
+				if util.IsStatus404(resp) {
+					return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to retrieve a list of the latest published evaluation form versions"), resp))
+				}
+				return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to retrieve a list of the latest published evaluation form versions"), resp))
+			}
+
+			if len(publishedVersions) > 0 {
+				_ = d.Set("published", true)
+			} else {
+				_ = d.Set("published", false)
+			}
+		} else {
+			_ = d.Set("published", *evaluationForm.Published)
+		}
+
 		if evaluationForm.Name != nil {
 			d.Set("name", *evaluationForm.Name)
-		}
-		if evaluationForm.Published != nil {
-			d.Set("published", *evaluationForm.Published)
 		}
 		if evaluationForm.QuestionGroups != nil {
 			d.Set("question_groups", flattenQuestionGroups(evaluationForm.QuestionGroups))
 		}
 
-		return cc.CheckState()
+		return cc.CheckState(d)
 	})
 }
 
@@ -297,39 +335,34 @@ func updateEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 	name := d.Get("name").(string)
 	published := d.Get("published").(bool)
 
-	questionGroups, qgErr := buildSdkQuestionGroups(d)
-	if qgErr != nil {
-		return qgErr
-	}
-
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
 
 	// Get the latest unpublished version of the form
-	formVersions, _, err := qualityAPI.GetQualityFormsEvaluationVersions(d.Id(), 25, 1, "desc")
+	formVersions, resp, err := qualityAPI.GetQualityFormsEvaluationVersions(d.Id(), 25, 1, "desc")
 	if err != nil {
-		return diag.Errorf("Failed to get evaluation form versions %s", name)
+		return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to get evaluation form versions %s error: %s", name, err), resp)
 	}
 
 	unpublishedForm := (*formVersions.Entities)[0]
 
 	log.Printf("Updating Evaluation Form %s", name)
-	form, _, err := qualityAPI.PutQualityFormsEvaluation(*unpublishedForm.Id, platformclientv2.Evaluationform{
+	form, resp, err := qualityAPI.PutQualityFormsEvaluation(*unpublishedForm.Id, platformclientv2.Evaluationform{
 		Name:           &name,
-		QuestionGroups: questionGroups,
+		QuestionGroups: buildSdkQuestionGroups(d),
 	})
 	if err != nil {
-		return diag.Errorf("Failed to update evaluation form %s", name)
+		return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to update evaluation form %s error: %s", name, err), resp)
 	}
 
 	// Set published property on evaluation form update.
 	if published {
-		_, _, err := qualityAPI.PostQualityPublishedformsEvaluations(platformclientv2.Publishform{
+		_, resp, err := qualityAPI.PostQualityPublishedformsEvaluations(platformclientv2.Publishform{
 			Id:        form.Id,
 			Published: &published,
 		})
 		if err != nil {
-			return diag.Errorf("Failed to publish evaluation form %s", name)
+			return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to publish evaluation form %s error: %s", name, err), resp)
 		}
 	} else {
 		// If published property is reset to false, set the resource Id to the latest unpublished form
@@ -343,44 +376,43 @@ func updateEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 func deleteEvaluationForm(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	name := d.Get("name").(string)
 
-	sdkConfig := meta.(*ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
 
 	// Get the latest unpublished version of the form
-	formVersions, _, err := qualityAPI.GetQualityFormsEvaluationVersions(d.Id(), 25, 1, "desc")
+	formVersions, resp, err := qualityAPI.GetQualityFormsEvaluationVersions(d.Id(), 25, 1, "desc")
 	if err != nil {
-		return diag.Errorf("Failed to get evaluation form versions %s", name)
+		return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to get evaluation form versions %s error: %s", name, err), resp)
 	}
 
 	latestFormVersion := (*formVersions.Entities)[0]
 	d.SetId(*latestFormVersion.Id)
 
 	log.Printf("Deleting evaluation form %s", name)
-	if _, err := qualityAPI.DeleteQualityFormsEvaluation(d.Id()); err != nil {
-		return diag.Errorf("Failed to delete evaluation form %s: %v", name, err)
+	if resp, err := qualityAPI.DeleteQualityFormsEvaluation(d.Id()); err != nil {
+		return util.BuildAPIDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Failed to delete evaluation form %s error: %s", name, err), resp)
 	}
 
-	return WithRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return util.WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		_, resp, err := qualityAPI.GetQualityFormsEvaluation(d.Id())
 		if err != nil {
-			if IsStatus404(resp) {
+			if util.IsStatus404(resp) {
 				// Evaluation form deleted
 				log.Printf("Deleted evaluation form %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting evaluation form %s: %s", d.Id(), err))
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_quality_forms_evaluation", fmt.Sprintf("Error deleting evaluation form %s | error: %s", d.Id(), err), resp))
 		}
 
-		return resource.RetryableError(fmt.Errorf("Evaluation form %s still exists", d.Id()))
+		return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_quality_forms_evaluationn", fmt.Sprintf("Evaluation form %s still exists", d.Id()), resp))
 	})
 }
 
-func buildSdkQuestionGroups(d *schema.ResourceData) (*[]platformclientv2.Evaluationquestiongroup, diag.Diagnostics) {
+func buildSdkQuestionGroups(d *schema.ResourceData) *[]platformclientv2.Evaluationquestiongroup {
 	questionGroupType := "questionGroup"
 
 	var evalQuestionGroups []platformclientv2.Evaluationquestiongroup
-	if questionGroups, ok := d.GetOk("question_groups"); ok {
-		questionGroupList := questionGroups.([]interface{})
+	if questionGroupList, ok := d.Get("question_groups").([]interface{}); ok {
 		for _, questionGroup := range questionGroupList {
 			questionGroupsMap := questionGroup.(map[string]interface{})
 
@@ -410,7 +442,7 @@ func buildSdkQuestionGroups(d *schema.ResourceData) (*[]platformclientv2.Evaluat
 		}
 	}
 
-	return &evalQuestionGroups, nil
+	return &evalQuestionGroups
 }
 
 func buildSdkQuestions(questions []interface{}) *[]platformclientv2.Evaluationquestion {
@@ -419,6 +451,7 @@ func buildSdkQuestions(questions []interface{}) *[]platformclientv2.Evaluationqu
 	sdkQuestions := make([]platformclientv2.Evaluationquestion, 0)
 	for _, question := range questions {
 		questionsMap := question.(map[string]interface{})
+
 		text := questionsMap["text"].(string)
 		helpText := questionsMap["help_text"].(string)
 		naEnabled := questionsMap["na_enabled"].(bool)
@@ -433,9 +466,9 @@ func buildSdkQuestions(questions []interface{}) *[]platformclientv2.Evaluationqu
 			VarType:          &questionType,
 			NaEnabled:        &naEnabled,
 			CommentsRequired: &commentsRequired,
-			AnswerOptions:    buildSdkAnswerOptions(answerQuestions),
 			IsKill:           &isKill,
 			IsCritical:       &isCritical,
+			AnswerOptions:    buildSdkAnswerOptions(answerQuestions),
 		}
 
 		visibilityCondition := questionsMap["visibility_condition"].([]interface{})
@@ -471,7 +504,10 @@ func buildSdkVisibilityCondition(visibilityCondition []interface{}) *platformcli
 		return nil
 	}
 
-	visibilityConditionMap := visibilityCondition[0].(map[string]interface{})
+	visibilityConditionMap, ok := visibilityCondition[0].(map[string]interface{})
+	if !ok {
+		return nil
+	}
 
 	combiningOperation := visibilityConditionMap["combining_operation"].(string)
 	predicates := visibilityConditionMap["predicates"].([]interface{})
@@ -487,10 +523,13 @@ func flattenQuestionGroups(questionGroups *[]platformclientv2.Evaluationquestion
 		return nil
 	}
 
-	questionGroupList := []interface{}{}
+	var questionGroupList []interface{}
 
 	for _, questionGroup := range *questionGroups {
 		questionGroupMap := make(map[string]interface{})
+		if questionGroup.Id != nil {
+			questionGroupMap["id"] = *questionGroup.Id
+		}
 		if questionGroup.Name != nil {
 			questionGroupMap["name"] = *questionGroup.Name
 		}
@@ -526,10 +565,13 @@ func flattenQuestions(questions *[]platformclientv2.Evaluationquestion) []interf
 		return nil
 	}
 
-	questionList := []interface{}{}
+	var questionList []interface{}
 
 	for _, question := range *questions {
 		questionMap := make(map[string]interface{})
+		if question.Id != nil {
+			questionMap["id"] = *question.Id
+		}
 		if question.Text != nil {
 			questionMap["text"] = *question.Text
 		}
@@ -565,17 +607,19 @@ func flattenAnswerOptions(answerOptions *[]platformclientv2.Answeroption) []inte
 		return nil
 	}
 
-	answerOptionsList := []interface{}{}
+	var answerOptionsList []interface{}
 
 	for _, answerOption := range *answerOptions {
 		answerOptionMap := make(map[string]interface{})
+		if answerOption.Id != nil {
+			answerOptionMap["id"] = *answerOption.Id
+		}
 		if answerOption.Text != nil {
 			answerOptionMap["text"] = *answerOption.Text
 		}
 		if answerOption.Value != nil {
 			answerOptionMap["value"] = *answerOption.Value
 		}
-
 		answerOptionsList = append(answerOptionsList, answerOptionMap)
 	}
 	return answerOptionsList
@@ -655,12 +699,12 @@ func GenerateEvaluationFormQuestions(questions *[]EvaluationFormQuestionStruct) 
 	for _, question := range *questions {
 		questionString := fmt.Sprintf(`
         questions {
-            text = "%s"
-            help_text = "%s"
-            na_enabled = %v
+            text              = "%s"
+            help_text         = "%s"
+            na_enabled        = %v
             comments_required = %v
-            is_kill = %v
-            is_critical = %v
+            is_kill           = %v
+            is_critical       = %v
             %s
             %s
         }
@@ -690,7 +734,7 @@ func GenerateFormAnswerOptions(answerOptions *[]AnswerOptionStruct) string {
 	for _, answerOption := range *answerOptions {
 		answerOptionString := fmt.Sprintf(`
         answer_options {
-            text = "%s"
+            text  = "%s"
             value = %v
         }
         `, answerOption.Text,

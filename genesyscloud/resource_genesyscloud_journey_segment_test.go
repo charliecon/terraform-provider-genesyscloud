@@ -4,22 +4,19 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
 	"testing"
 
 	"terraform-provider-genesyscloud/genesyscloud/util/testrunner"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v105/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
 
-func TestAccResourceJourneySegmentCustomer(t *testing.T) {
-	runResourceJourneySegmentTestCase(t, "basic_customer_attributes")
-}
-
-func TestAccResourceJourneySegmentSession(t *testing.T) {
-	runResourceJourneySegmentTestCase(t, "basic_session_attributes")
+func TestAccResourceJourneySegment(t *testing.T) {
+	runResourceJourneySegmentTestCase(t, "basic_attributes")
 }
 
 func TestAccResourceJourneySegmentContextOnly(t *testing.T) {
@@ -35,15 +32,15 @@ func runResourceJourneySegmentTestCase(t *testing.T, testCaseName string) {
 	setupJourneySegment(t, testCaseName)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { TestAccPreCheck(t) },
-		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
+		PreCheck:          func() { util.TestAccPreCheck(t) },
+		ProviderFactories: provider.GetProviderFactories(providerResources, providerDataSources),
 		Steps:             testrunner.GenerateResourceTestSteps(resourceName, testCaseName, nil),
 		CheckDestroy:      testVerifyJourneySegmentsDestroyed,
 	})
 }
 
 func setupJourneySegment(t *testing.T, testCaseName string) {
-	_, err := AuthorizeSdk()
+	_, err := provider.AuthorizeSdk()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,30 +51,36 @@ func setupJourneySegment(t *testing.T, testCaseName string) {
 func cleanupJourneySegments(idPrefix string) {
 	journeyApi := platformclientv2.NewJourneyApiWithConfig(sdkConfig)
 
-	pageCount := 1 // Needed because of broken journey common paging
-	for pageNum := 1; pageNum <= pageCount; pageNum++ {
-		const pageSize = 100
+	segmentsToDelete := make([]platformclientv2.Journeysegment, 0)
+
+	// go through all segments to find those to delete
+	const pageSize = 200
+	for pageNum := 1; ; pageNum++ {
 		journeySegments, _, getErr := journeyApi.GetJourneySegments("", pageSize, pageNum, true, nil, nil, "")
 		if getErr != nil {
+			log.Printf("failed to get page %v of journeySegments: %v", pageNum, getErr)
 			return
-		}
-
-		if journeySegments.Entities == nil || len(*journeySegments.Entities) == 0 {
-			break
 		}
 
 		for _, journeySegment := range *journeySegments.Entities {
 			if journeySegment.DisplayName != nil && strings.HasPrefix(*journeySegment.DisplayName, idPrefix) {
-				_, delErr := journeyApi.DeleteJourneySegment(*journeySegment.Id)
-				if delErr != nil {
-					diag.Errorf("failed to delete journey segment %s (%s): %s", *journeySegment.Id, *journeySegment.DisplayName, delErr)
-					return
-				}
-				log.Printf("Deleted journey segment %s (%s)", *journeySegment.Id, *journeySegment.DisplayName)
+				segmentsToDelete = append(segmentsToDelete, journeySegment)
 			}
 		}
 
-		pageCount = *journeySegments.PageCount
+		if *journeySegments.PageNumber >= *journeySegments.PageCount {
+			break
+		}
+	}
+
+	// delete them
+	for _, journeySegment := range segmentsToDelete {
+		_, delErr := journeyApi.DeleteJourneySegment(*journeySegment.Id)
+		if delErr != nil {
+			util.BuildDiagnosticError("genesyscloud_journey_segment", fmt.Sprintf("failed to delete journey segment %s (%s)", *journeySegment.Id, *journeySegment.DisplayName), delErr)
+			return
+		}
+		log.Printf("Deleted journey segment %s (%s)", *journeySegment.Id, *journeySegment.DisplayName)
 	}
 }
 
@@ -93,7 +96,7 @@ func testVerifyJourneySegmentsDestroyed(state *terraform.State) error {
 			return fmt.Errorf("journey segment (%s) still exists", rs.Primary.ID)
 		}
 
-		if IsStatus404(resp) {
+		if util.IsStatus404(resp) {
 			// Journey segment not found as expected
 			continue
 		}

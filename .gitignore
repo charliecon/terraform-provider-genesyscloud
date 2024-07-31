@@ -28,7 +28,7 @@ website/node_modules
 terraform-provider-genesyscloud
 .env
 .vscode
-
+**/true
 website/vendor
 vendor/
 
@@ -48,3 +48,5 @@ __debug_bin
 # Ignore coverage reports
 coverage.out
 cover.html
+coverage_unit.out
+cover_unit.html

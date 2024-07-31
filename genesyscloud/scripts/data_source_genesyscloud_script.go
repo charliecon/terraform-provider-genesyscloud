@@ -3,12 +3,13 @@ package scripts
 import (
 	"context"
 	"fmt"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
 	"time"
 
-	gcloud "terraform-provider-genesyscloud/genesyscloud"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
@@ -18,30 +19,21 @@ DataSource for the Scripts resource
 
 // dataSourceScriptRead provides the main terraform code needed to read a script resource by name
 func dataSourceScriptRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	sdkConfig := m.(*gcloud.ProviderMeta).ClientConfig
+	sdkConfig := m.(*provider.ProviderMeta).ClientConfig
 	scriptsProxy := getScriptsProxy(sdkConfig)
 
 	name := d.Get("name").(string)
 
 	// Query for scripts by name. Retry in case new script is not yet indexed by search.
-	// As script names are non-unique, fail in case of multiple results.
-	return gcloud.WithRetries(ctx, 15*time.Second, func() *resource.RetryError {
-		scripts, err := scriptsProxy.getPublishedScriptsByName(ctx, name)
-
+	return util.WithRetries(ctx, 15*time.Second, func() *retry.RetryError {
+		scriptId, retryable, resp, err := scriptsProxy.getScriptIdByName(ctx, name)
 		if err != nil {
-			return resource.NonRetryableError(fmt.Errorf("Error requesting script %s: %s", name, err))
+			if retryable {
+				return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError(resourceName, fmt.Sprintf("Failed to get Script %s", err), resp))
+			}
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError(resourceName, fmt.Sprintf("Failed to get Script %s", err), resp))
 		}
-
-		if len(*scripts) == 0 {
-			return resource.RetryableError(fmt.Errorf("No scripts found with name %s", name))
-		}
-
-		if len(*scripts) > 1 {
-			return resource.NonRetryableError(fmt.Errorf("Ambiguous script name: %s", name))
-		}
-
-		script := (*scripts)[0]
-		d.SetId(*script.Id)
+		d.SetId(scriptId)
 		return nil
 	})
 }

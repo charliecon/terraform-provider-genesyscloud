@@ -4,19 +4,23 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
+	"terraform-provider-genesyscloud/genesyscloud/util/constants"
 	"time"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 
 	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
 
-	gcloud "terraform-provider-genesyscloud/genesyscloud"
+	routingSkill "terraform-provider-genesyscloud/genesyscloud/routing_skill"
 
 	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 	"terraform-provider-genesyscloud/genesyscloud/util/resourcedata"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v105/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
 
 /*
@@ -28,29 +32,39 @@ func getAllAuthOutboundRuleset(ctx context.Context, clientConfig *platformclient
 	proxy := getOutboundRulesetProxy(clientConfig)
 	resources := make(resourceExporter.ResourceIDMetaMap)
 
-	rulesets, err := proxy.getAllOutboundRuleset(ctx)
-	if err != nil {
-		return nil, diag.Errorf("Failed to get ruleset: %v", err)
+	rulesets, resp, rsErr := proxy.getAllOutboundRuleset(ctx)
+	if rsErr != nil {
+		return nil, util.BuildAPIDiagnosticError(resourceName, fmt.Sprintf("Failed to get rulesets error: %s", rsErr), resp)
 	}
 
-	for _, ruleset := range *rulesets {
+	// DEVTOOLING-319: filters rule sets by removing the ones that reference skills that no longer exist in GC
+	skillExporter := routingSkill.RoutingSkillExporter()
+	skillMap, skillErr := skillExporter.GetResourcesFunc(ctx)
+	if skillErr != nil {
+		return nil, util.BuildDiagnosticError(resourceName, fmt.Sprintf("Failed to get skill resources"), fmt.Errorf("%v", skillErr))
+	}
+	filteredRuleSets, filterErr := filterOutboundRulesets(*rulesets, skillMap)
+	if filterErr != nil {
+		return nil, util.BuildDiagnosticError(resourceName, fmt.Sprintf("Failed to filter outbound rulesets"), fmt.Errorf("%v", filterErr))
+	}
+
+	for _, ruleset := range filteredRuleSets {
 		log.Printf("Dealing with ruleset id : %s", *ruleset.Id)
-		resources[*ruleset.Id] = &resourceExporter.ResourceMeta{Name: *ruleset.Id}
+		resources[*ruleset.Id] = &resourceExporter.ResourceMeta{Name: *ruleset.Name}
 	}
-
 	return resources, nil
 }
 
 // createOutboundRuleset is used by the outbound_ruleset resource to create Genesys cloud outbound_ruleset
 func createOutboundRuleset(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*gcloud.ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	proxy := newOutboundRulesetProxy(sdkConfig)
 
 	outboundRuleset := getOutboundRulesetFromResourceData(d)
 
-	ruleset, err := proxy.createOutboundRuleset(ctx, &outboundRuleset)
+	ruleset, resp, err := proxy.createOutboundRuleset(ctx, &outboundRuleset)
 	if err != nil {
-		return diag.Errorf("Failed to create ruleset: %s", err)
+		return util.BuildAPIDiagnosticError(resourceName, fmt.Sprintf("Failed to create ruleset %s error: %s", *outboundRuleset.Name, err), resp)
 	}
 
 	d.SetId(*ruleset.Id)
@@ -60,21 +74,20 @@ func createOutboundRuleset(ctx context.Context, d *schema.ResourceData, meta int
 
 // readOutboundRuleset is used by the outbound_ruleset resource to read an outbound ruleset from genesys cloud.
 func readOutboundRuleset(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*gcloud.ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	proxy := newOutboundRulesetProxy(sdkConfig)
+	cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceOutboundRuleset(), constants.DefaultConsistencyChecks, resourceName)
 
 	log.Printf("Reading Outbound Ruleset %s", d.Id())
 
-	return gcloud.WithRetriesForRead(ctx, d, func() *resource.RetryError {
-		ruleset, respCode, getErr := proxy.getOutboundRulesetById(ctx, d.Id())
+	return util.WithRetriesForRead(ctx, d, func() *retry.RetryError {
+		ruleset, resp, getErr := proxy.getOutboundRulesetById(ctx, d.Id())
 		if getErr != nil {
-			if gcloud.IsStatus404ByInt(respCode) {
-				return resource.RetryableError(fmt.Errorf("Failed to read Outbound Ruleset %s: %s", d.Id(), getErr))
+			if util.IsStatus404(resp) {
+				return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError(resourceName, fmt.Sprintf("Failed to read Outbound Ruleset %s | error: %s", d.Id(), getErr), resp))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read Outbound Ruleset %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError(resourceName, fmt.Sprintf("Failed to read Outbound Ruleset %s | error: %s", d.Id(), getErr), resp))
 		}
-
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceOutboundRuleset())
 
 		resourcedata.SetNillableValue(d, "name", ruleset.Name)
 		resourcedata.SetNillableReference(d, "contact_list_id", ruleset.ContactList)
@@ -82,20 +95,20 @@ func readOutboundRuleset(ctx context.Context, d *schema.ResourceData, meta inter
 		resourcedata.SetNillableValueWithInterfaceArrayWithFunc(d, "rules", ruleset.Rules, flattenDialerrules)
 
 		log.Printf("Read Outbound Ruleset %s %s", d.Id(), *ruleset.Name)
-		return cc.CheckState()
+		return cc.CheckState(d)
 	})
 }
 
 // updateOutboundRuleset is used by the outbound_ruleset resource to update an outbound ruleset in Genesys Cloud
 func updateOutboundRuleset(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*gcloud.ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	proxy := newOutboundRulesetProxy(sdkConfig)
 
 	outboundRuleset := getOutboundRulesetFromResourceData(d)
 
-	ruleset, err := proxy.updateOutboundRuleset(ctx, d.Id(), &outboundRuleset)
+	ruleset, resp, err := proxy.updateOutboundRuleset(ctx, d.Id(), &outboundRuleset)
 	if err != nil {
-		return diag.Errorf("Failed to update ruleset: %s", err)
+		return util.BuildAPIDiagnosticError(resourceName, fmt.Sprintf("Failed to update ruleset %s error: %s", *outboundRuleset.Name, err), resp)
 	}
 
 	log.Printf("Updated Outbound Ruleset %s", *ruleset.Id)
@@ -104,29 +117,51 @@ func updateOutboundRuleset(ctx context.Context, d *schema.ResourceData, meta int
 
 // deleteOutboundRuleset is used by the outbound_ruleset resource to delete an outbound ruleset from Genesys cloud.
 func deleteOutboundRuleset(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*gcloud.ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	proxy := newOutboundRulesetProxy(sdkConfig)
 
-	_, err := proxy.deleteOutboundRuleset(ctx, d.Id())
+	resp, err := proxy.deleteOutboundRuleset(ctx, d.Id())
 	if err != nil {
-		return diag.Errorf("Failed to delete ruleset %s: %s", d.Id(), err)
+		return util.BuildAPIDiagnosticError(resourceName, fmt.Sprintf("Failed to delete ruleset %s error: %s", d.Id(), err), resp)
 	}
 
-	return gcloud.WithRetries(ctx, 1800*time.Second, func() *resource.RetryError {
-		_, respCode, err := proxy.getOutboundRulesetById(ctx, d.Id())
+	return util.WithRetries(ctx, 1800*time.Second, func() *retry.RetryError {
+		_, resp, err := proxy.getOutboundRulesetById(ctx, d.Id())
 
 		//Now that I am checking for th error string of API 404 and there is no error, I need to move the isStatus404
 		//moved out of the code
-		if gcloud.IsStatus404ByInt(respCode) {
+		if util.IsStatus404(resp) {
 			// Outbound Ruleset deleted
 			log.Printf("Deleted Outbound Ruleset %s", d.Id())
 			return nil
 		}
 
 		if err != nil {
-			return resource.NonRetryableError(fmt.Errorf("Error deleting Outbound Ruleset %s: %s", d.Id(), err))
+			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError(resourceName, fmt.Sprintf("Error deleting Outbound Ruleset %s | error: %s", d.Id(), err), resp))
 		}
-
-		return resource.RetryableError(fmt.Errorf("Outbound Ruleset %s still exists", d.Id()))
+		return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError(resourceName, fmt.Sprintf("Outbound Ruleset %s still exists", d.Id()), resp))
 	})
+}
+
+// filterOutboundRulesets filters rule sets by removing the ones that reference skills that no longer exist in GC
+func filterOutboundRulesets(ruleSets []platformclientv2.Ruleset, skillMap resourceExporter.ResourceIDMetaMap) ([]platformclientv2.Ruleset, diag.Diagnostics) {
+	var filteredRuleSets []platformclientv2.Ruleset
+	log.Printf("Filtering outbound rule sets")
+
+	for _, ruleSet := range ruleSets {
+		var foundDeleted bool
+		for _, rule := range *ruleSet.Rules {
+			if doesRuleActionsRefDeletedSkill(rule, skillMap) || doesRuleConditionsRefDeletedSkill(rule, skillMap) {
+				foundDeleted = true
+				break
+			}
+		}
+		if foundDeleted {
+			log.Printf("Removing ruleset id '%s'", *ruleSet.Id)
+		} else {
+			// No references to a deleted skill in the ruleset, keep it
+			filteredRuleSets = append(filteredRuleSets, ruleSet)
+		}
+	}
+	return filteredRuleSets, nil
 }

@@ -4,31 +4,40 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
-	gcloud "terraform-provider-genesyscloud/genesyscloud"
+	"terraform-provider-genesyscloud/genesyscloud/util"
+	"terraform-provider-genesyscloud/genesyscloud/util/files"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 )
 
+const resourceJSONFileExt = "tf.json"
+
+type resourceJSONMaps map[string]util.JsonMap
+
 type JsonExporter struct {
-	resourceTypeJSONMaps map[string]map[string]gcloud.JsonMap
-	unresolvedAttrs      []unresolvableAttributeInfo
-	providerSource       string
-	version              string
-	filePath             string
-	tfVarsFilePath       string
+	resourceTypesJSONMaps map[string]resourceJSONMaps
+	dataSourceTypesMaps   map[string]resourceJSONMaps
+	unresolvedAttrs       []unresolvableAttributeInfo
+	providerSource        string
+	version               string
+	dirPath               string
+	splitFilesByResource  bool
 }
 
-func NewJsonExporter(resourceTypeJSONMaps map[string]map[string]gcloud.JsonMap, unresolvedAttrs []unresolvableAttributeInfo, providerSource string, version string, filePath string, tfVarsFilePath string) *JsonExporter {
+func NewJsonExporter(resourceTypesJSONMaps map[string]resourceJSONMaps, dataSourceTypesMaps map[string]resourceJSONMaps, unresolvedAttrs []unresolvableAttributeInfo, providerSource string, version string, dirPath string, splitFilesByResource bool) *JsonExporter {
 	jsonExporter := &JsonExporter{
-		resourceTypeJSONMaps: resourceTypeJSONMaps,
-		unresolvedAttrs:      unresolvedAttrs,
-		providerSource:       providerSource,
-		version:              version,
-		filePath:             filePath,
-		tfVarsFilePath:       tfVarsFilePath,
+		resourceTypesJSONMaps: resourceTypesJSONMaps,
+		dataSourceTypesMaps:   dataSourceTypesMaps,
+		unresolvedAttrs:       unresolvedAttrs,
+		providerSource:        providerSource,
+		version:               version,
+		dirPath:               dirPath,
+		splitFilesByResource:  splitFilesByResource,
 	}
 	return jsonExporter
 }
@@ -37,47 +46,139 @@ func NewJsonExporter(resourceTypeJSONMaps map[string]map[string]gcloud.JsonMap, 
 This file contains all of the functions used to generate the JSON export.
 */
 func (j *JsonExporter) exportJSONConfig() diag.Diagnostics {
-	rootJSONObject := gcloud.JsonMap{
-		"resource": j.resourceTypeJSONMaps,
-		"terraform": gcloud.JsonMap{
-			"required_providers": gcloud.JsonMap{
-				"genesyscloud": gcloud.JsonMap{
-					"source":  j.providerSource,
-					"version": j.version,
+	providerJsonMap := createProviderJsonMap(j.providerSource, j.version)
+	variablesJsonMap := createVariablesJsonMap(j.unresolvedAttrs)
+
+	if j.splitFilesByResource {
+		// Provider file
+		terraformRoot := map[string]interface{}{
+			"terraform": providerJsonMap,
+		}
+		providerJSONFilePath := filepath.Join(j.dirPath, defaultTfJSONProviderFile)
+		if providerJSONFilePath == "" {
+			return diag.Errorf("Failed to create file path %s", providerJSONFilePath)
+		}
+		if diagErr := writeConfig(terraformRoot, providerJSONFilePath); diagErr != nil {
+			return diagErr
+		}
+
+		// Variables file
+		variablesRoot := map[string]interface{}{
+			"variable": variablesJsonMap,
+		}
+		variablesJSONFilePath := filepath.Join(j.dirPath, defaultTfJSONVariablesFile)
+		if variablesJSONFilePath == "" {
+			return diag.Errorf("Failed to create file path %s", variablesJSONFilePath)
+		}
+		if diagErr := writeConfig(variablesRoot, variablesJSONFilePath); diagErr != nil {
+			return diagErr
+		}
+
+		// Resource files
+		for resType, resJsonMap := range j.resourceTypesJSONMaps {
+			resourceRoot := map[string]interface{}{
+				"resource": util.JsonMap{
+					resType: resJsonMap,
 				},
-			},
-		},
+			}
+
+			resourceJSONFilePath := filepath.Join(j.dirPath, fmt.Sprintf("%s.%s", resType, resourceJSONFileExt))
+			if resourceJSONFilePath == "" {
+				return diag.Errorf("Failed to create file path %s", resourceJSONFilePath)
+			}
+			if diagErr := writeConfig(resourceRoot, resourceJSONFilePath); diagErr != nil {
+				return diagErr
+			}
+		}
+
+		// DataSource files
+		for resType, resJsonMap := range j.dataSourceTypesMaps {
+			resourceRoot := map[string]interface{}{
+				"data": util.JsonMap{
+					resType: resJsonMap,
+				},
+			}
+
+			resourceJSONFilePath := filepath.Join(j.dirPath, fmt.Sprintf("%s.%s", resType, resourceJSONFileExt))
+			if resourceJSONFilePath == "" {
+				return diag.Errorf("Failed to create file path %s", resourceJSONFilePath)
+			}
+			if diagErr := writeConfig(resourceRoot, resourceJSONFilePath); diagErr != nil {
+				return diagErr
+			}
+		}
+
+	} else {
+		// Single file export
+		rootJSONObject := util.JsonMap{
+			"resource":  j.resourceTypesJSONMaps,
+			"terraform": providerJsonMap,
+			"data":      j.dataSourceTypesMaps,
+		}
+
+		if len(variablesJsonMap) > 0 {
+			rootJSONObject["variable"] = variablesJsonMap
+		}
+
+		jsonFilePath := filepath.Join(j.dirPath, defaultTfJSONFile)
+		if jsonFilePath == "" {
+			return diag.Errorf("Failed to create file path %s", jsonFilePath)
+		}
+
+		writeConfig(rootJSONObject, jsonFilePath)
 	}
 
+	// Optional tfvars file creation for unresolved attributes
 	if len(j.unresolvedAttrs) > 0 {
 		tfVars := make(map[string]interface{})
-		variable := make(map[string]gcloud.JsonMap)
 		for _, attr := range j.unresolvedAttrs {
-			key := fmt.Sprintf("%s_%s_%s", attr.ResourceType, attr.ResourceName, attr.Name)
-			variable[key] = make(gcloud.JsonMap)
-			tfVars[key] = make(gcloud.JsonMap)
-			variable[key]["description"] = attr.Schema.Description
-			if variable[key]["description"] == "" {
-				variable[key]["description"] = fmt.Sprintf("%s value for resource %s of type %s", attr.Name, attr.ResourceName, attr.ResourceType)
-			}
-
-			variable[key]["sensitive"] = attr.Schema.Sensitive
-			if attr.Schema.Default != nil {
-				variable[key]["default"] = attr.Schema.Default
-			}
-
+			key := createUnresolvedAttrKey(attr)
+			tfVars[key] = make(util.JsonMap)
 			tfVars[key] = determineVarValue(attr.Schema)
-
-			variable[key]["type"] = determineVarType(attr.Schema)
 		}
-		rootJSONObject["variable"] = variable
 
-		if err := writeTfVars(tfVars, j.tfVarsFilePath); err != nil {
+		tfVarsFilePath := filepath.Join(j.dirPath, defaultTfVarsFile)
+		if tfVarsFilePath == "" {
+			return diag.Errorf("Failed to create tfvars file path %s", tfVarsFilePath)
+		}
+		if err := writeTfVars(tfVars, tfVarsFilePath); err != nil {
 			return err
 		}
 	}
 
-	return writeConfig(rootJSONObject, j.filePath)
+	return nil
+}
+
+func createProviderJsonMap(providerSource string, version string) util.JsonMap {
+	return util.JsonMap{
+		"required_providers": util.JsonMap{
+			"genesyscloud": util.JsonMap{
+				"source":  providerSource,
+				"version": version,
+			},
+		},
+	}
+}
+
+func createVariablesJsonMap(unresolvedAttrs []unresolvableAttributeInfo) map[string]util.JsonMap {
+	variable := make(map[string]util.JsonMap)
+	for _, attr := range unresolvedAttrs {
+		key := createUnresolvedAttrKey(attr)
+		variable[key] = make(util.JsonMap)
+		variable[key]["description"] = attr.Schema.Description
+		if variable[key]["description"] == "" {
+			variable[key]["description"] = fmt.Sprintf("%s value for resource %s of type %s", attr.Name, attr.ResourceName, attr.ResourceType)
+		}
+
+		variable[key]["sensitive"] = attr.Schema.Sensitive
+		if attr.Schema.Default != nil {
+			variable[key]["default"] = attr.Schema.Default
+		}
+
+		variable[key]["type"] = determineVarType(attr.Schema)
+	}
+
+	return variable
 }
 
 func getDecodedData(jsonString string, currAttr string) (string, error) {
@@ -107,7 +208,7 @@ func getDecodedData(jsonString string, currAttr string) (string, error) {
 	return decodedJson, nil
 }
 
-func resolveRefAttributesInJsonString(currAttr string, currVal string, exporter *resourceExporter.ResourceExporter, exporters map[string]*resourceExporter.ResourceExporter, exportingState bool) (string, error) {
+func (g *GenesysCloudResourceExporter) resolveRefAttributesInJsonString(currAttr string, currVal string, exporter *resourceExporter.ResourceExporter, exporters map[string]*resourceExporter.ResourceExporter, exportingState bool) (string, error) {
 	var jsonData interface{}
 	err := json.Unmarshal([]byte(currVal), &jsonData)
 	if err != nil {
@@ -120,11 +221,11 @@ func resolveRefAttributesInJsonString(currAttr string, currVal string, exporter 
 		if data, ok := jsonData.(map[string]interface{}); ok {
 			switch data[value].(type) {
 			case string:
-				data[value] = resolveReference(refSettings, data[value].(string), exporters, exportingState)
+				data[value] = g.resolveReference(refSettings, data[value].(string), exporters, exportingState)
 			case []interface{}:
 				array := data[value].([]interface{})
 				for k, v := range array {
-					array[k] = resolveReference(refSettings, v.(string), exporters, exportingState)
+					array[k] = g.resolveReference(refSettings, v.(string), exporters, exportingState)
 				}
 				data[value] = array
 			}
@@ -183,8 +284,14 @@ func writeConfig(jsonMap map[string]interface{}, path string) diag.Diagnostics {
 	}
 
 	log.Printf("Writing export config file to %s", path)
-	if err := writeToFile(dataJSONBytes, path); err != nil {
+	if err := files.WriteToFile(postProcessJsonBytes(dataJSONBytes), path); err != nil {
 		return err
 	}
 	return nil
+}
+
+func postProcessJsonBytes(resource []byte) []byte {
+	resourceStr := string(resource)
+	resourceStr = correctDependsOn(resourceStr, false)
+	return []byte(resourceStr)
 }

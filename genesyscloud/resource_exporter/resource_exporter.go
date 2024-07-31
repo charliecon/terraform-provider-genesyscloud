@@ -2,14 +2,14 @@ package resource_exporter
 
 import (
 	"context"
-	"hash/fnv"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
-	"unicode"
 
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 
 	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
 
@@ -19,10 +19,6 @@ import (
 var resourceExporters map[string]*ResourceExporter
 var resourceExporterMapMutex = sync.RWMutex{}
 
-// func init() {
-// 	resourceExporters = make(map[string]*ResourceExporter)
-// }
-
 type ResourceMeta struct {
 	// Name of the resource to be used in exports
 	Name string
@@ -31,8 +27,10 @@ type ResourceMeta struct {
 	IdPrefix string
 }
 
-// resourceExporter.ResourceIDMetaMap is a map of IDs to ResourceMeta
+// ResourceIDMetaMap is a map of IDs to ResourceMeta
 type ResourceIDMetaMap map[string]*ResourceMeta
+
+type GetAllCustomResourcesFunc func(context.Context) (ResourceIDMetaMap, *DependencyResource, diag.Diagnostics)
 
 // GetAllResourcesFunc is a method that returns all resource IDs
 type GetAllResourcesFunc func(context.Context) (ResourceIDMetaMap, diag.Diagnostics)
@@ -47,12 +45,21 @@ type RefAttrSettings struct {
 	AltValues []string
 }
 
-// Allows the definition of a custom resolver for an exporter.
-type RefAttrCustomResolver struct {
-	ResolverFunc func(map[string]interface{}, map[string]*ResourceExporter) error
+type ResourceInfo struct {
+	State        *terraform.InstanceState
+	Name         string
+	Type         string
+	CtyType      cty.Type
+	ResourceType string
 }
 
-// Allows the definition of a custom resolver for an exporter.
+// RefAttrCustomResolver allows the definition of a custom resolver for an exporter.
+type RefAttrCustomResolver struct {
+	ResolverFunc            func(map[string]interface{}, map[string]*ResourceExporter, string) error
+	ResolveToDataSourceFunc func(map[string]interface{}, any, *platformclientv2.Configuration) (string, string, map[string]interface{}, bool)
+}
+
+// CustomFlowResolver allows the definition of a custom resolver for an exporter.
 type CustomFlowResolver struct {
 	ResolverFunc func(map[string]interface{}, string) error
 }
@@ -77,6 +84,11 @@ type JsonEncodeRefAttr struct {
 	NestedAttr string
 }
 
+type DependencyResource struct {
+	DependsMap        map[string][]string
+	CyclicDependsList []string
+}
+
 // ResourceExporter is an interface to implement for resources that can be exported
 type ResourceExporter struct {
 
@@ -93,6 +105,16 @@ type ResourceExporter struct {
 	// By default zero values are removed from the config due to lack of "null" support in the plugin SDK
 	AllowZeroValues []string
 
+	// AllowZeroValuesInMap is a list of attributes that are maps. Adding a map attribute to this list indicates to
+	// the exporter that the values within said map should not be cleaned up if they are zero values
+	AllowZeroValuesInMap []string
+
+	// AllowEmptyArrays is a list of List attributes that should allow empty arrays in export.
+	// By default, empty arrays are removed but some array attributes may be required in the schema
+	// or depending on the API behavior better presented explicitly in the API as empty arrays.
+	// If the state has this as null or empty array, then the attribute will be returned as an empty array.
+	AllowEmptyArrays []string
+
 	// Some of our dependencies can not be exported properly because they have interdependencies between attributes.  You can
 	// define a map of custom attribute resolvers with an exporter.  See resource_genesyscloud_routing_queue for an example of how to define this.
 	// NOTE: CustomAttributeResolvers should be the exception and not the norm so use them when you have to do logic that will help you
@@ -105,7 +127,6 @@ type ResourceExporter struct {
 
 	// Map of resource id->names. This is set after a call to loadSanitizedResourceMap
 	SanitizedResourceMap ResourceIDMetaMap
-
 	// List of attributes to exclude from config. This is set by the export configuration.
 	ExcludedAttributes []string
 
@@ -122,10 +143,11 @@ type ResourceExporter struct {
 
 	CustomFlowResolver map[string]*CustomFlowResolver
 
-	//This a place holder filter out specific resources from a filter.
+	//This a placeholder filter out specific resources from a filter.
 	FilterResource func(ResourceIDMetaMap, string, []string) ResourceIDMetaMap
-	// Attributes that are e164 numbers and should be ensured to export in the correct format (remove hyphens, whitespace, etc.)
-	E164Numbers []string
+	// Attributes that are mentioned with custom exports like e164 numbers,rrule  should be ensured to export in the correct format (remove hyphens, whitespace, etc.)
+	CustomValidateExports map[string][]string
+	mutex                 sync.RWMutex
 }
 
 func (r *ResourceExporter) LoadSanitizedResourceMap(ctx context.Context, name string, filter []string) diag.Diagnostics {
@@ -138,8 +160,14 @@ func (r *ResourceExporter) LoadSanitizedResourceMap(ctx context.Context, name st
 		result = r.FilterResource(result, name, filter)
 	}
 
+	// Lock the Resource Map as it is accessed by goroutines
+	r.mutex.Lock()
 	r.SanitizedResourceMap = result
-	sanitizeResourceNames(r.SanitizedResourceMap)
+	r.mutex.Unlock()
+
+	sanitizer := NewSanitizerProvider()
+	sanitizer.S.Sanitize(r.SanitizedResourceMap)
+
 	return nil
 }
 
@@ -161,7 +189,7 @@ func (r *ResourceExporter) GetNestedRefAttrSettings(attribute string) *RefAttrSe
 
 func (r *ResourceExporter) ContainsNestedRefAttrs(attribute string) ([]string, bool) {
 	var nestedAttributes []string
-	for key, _ := range r.EncodedRefAttrs {
+	for key := range r.EncodedRefAttrs {
 		if key.Attr == attribute {
 			nestedAttributes = append(nestedAttributes, key.NestedAttr)
 		}
@@ -173,12 +201,32 @@ func (r *ResourceExporter) AllowForZeroValues(attribute string) bool {
 	return lists.ItemInSlice(attribute, r.AllowZeroValues)
 }
 
+func (r *ResourceExporter) AllowForZeroValuesInMap(attribute string) bool {
+	return lists.ItemInSlice(attribute, r.AllowZeroValuesInMap)
+}
+
+func (r *ResourceExporter) AllowForEmptyArrays(attribute string) bool {
+	return lists.ItemInSlice(attribute, r.AllowEmptyArrays)
+}
+
 func (r *ResourceExporter) IsJsonEncodable(attribute string) bool {
 	return lists.ItemInSlice(attribute, r.JsonEncodeAttributes)
 }
 
 func (r *ResourceExporter) IsAttributeE164(attribute string) bool {
-	return lists.ItemInSlice(attribute, r.E164Numbers)
+	values, exists := r.CustomValidateExports["E164"]
+	if !exists {
+		return false
+	}
+	return lists.ItemInSlice(attribute, values)
+}
+
+func (r *ResourceExporter) IsAttributeRrule(attribute string) bool {
+	values, exists := r.CustomValidateExports["rrule"]
+	if !exists {
+		return false
+	}
+	return lists.ItemInSlice(attribute, values)
 }
 
 func (r *ResourceExporter) AddExcludedAttribute(attribute string) {
@@ -221,7 +269,7 @@ func GetResourceExporters() map[string]*ResourceExporter {
 	return exportCopy
 }
 
-//terraform-provider-genesyscloud/genesyscloud/tfexporter
+// terraform-provider-genesyscloud/genesyscloud/tfexporter
 func GetAvailableExporterTypes() []string {
 	exporters := GetResourceExporters()
 	types := make([]string, len(exporters))
@@ -242,28 +290,9 @@ func escapeRune(s string) string {
 // https://www.terraform.io/docs/language/syntax/configuration.html#identifiers
 var unsafeNameChars = regexp.MustCompile(`[^0-9A-Za-z_-]`)
 
-func sanitizeResourceNames(idMetaMap ResourceIDMetaMap) {
-	for _, meta := range idMetaMap {
-		meta.Name = SanitizeResourceName(meta.Name)
-	}
-}
-
-func SanitizeResourceName(inputName string) string {
-	name := unsafeNameChars.ReplaceAllStringFunc(inputName, escapeRune)
-	if name != inputName {
-		// Append a hash of the original name to ensure uniqueness for similar names
-		// and that equivalent names are consistent across orgs
-		algorithm := fnv.New32()
-		algorithm.Write([]byte(inputName))
-		name = name + "_" + strconv.FormatUint(uint64(algorithm.Sum32()), 10)
-	}
-	if unicode.IsDigit(rune(name[0])) {
-		// Terraform does not allow names to begin with a number. Prefix with an underscore instead
-		name = "_" + name
-	}
-
-	return name
-}
+// Resource names must start with a letter or underscore
+// https://www.terraform.io/docs/language/syntax/configuration.html#identifiers
+var unsafeNameStartingChars = regexp.MustCompile(`[^A-Za-z_]`)
 
 func RegisterExporter(exporterName string, resourceExporter *ResourceExporter) {
 	resourceExporterMapMutex.Lock()
@@ -275,4 +304,23 @@ func SetRegisterExporter(resources map[string]*ResourceExporter) {
 	resourceExporterMapMutex.Lock()
 	defer resourceExporterMapMutex.Unlock()
 	resourceExporters = resources
+}
+
+var (
+	ExportAsData          []string
+	dsMutex               sync.Mutex
+	resourceNameSanitizer = NewSanitizerProvider()
+)
+
+// The AddDataSourceItems function adds resources to the ExportAsData []string and are formatted correctly
+// The ExportAsData will be checked in the genesyscloud_resource_exporter to determine resources to be exported as data source
+func AddDataSourceItems(resourceName, itemName string) {
+	exportName := resourceName + "::" + resourceNameSanitizer.S.SanitizeResourceName(itemName)
+	addDataSourceItemstoExport(exportName)
+}
+
+func addDataSourceItemstoExport(name string) {
+	dsMutex.Lock()
+	defer dsMutex.Unlock()
+	ExportAsData = append(ExportAsData, name)
 }

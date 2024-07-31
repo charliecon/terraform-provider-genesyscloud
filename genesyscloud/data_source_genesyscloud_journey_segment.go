@@ -3,18 +3,21 @@ package genesyscloud
 import (
 	"context"
 	"fmt"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v105/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
 
 func dataSourceJourneySegment() *schema.Resource {
 	return &schema.Resource{
 		Description: "Data source for Genesys Cloud Journey Segment. Select a journey segment by name",
-		ReadContext: ReadWithPooledClient(dataSourceJourneySegmentRead),
+		ReadContext: provider.ReadWithPooledClient(dataSourceJourneySegmentRead),
 		Schema: map[string]*schema.Schema{
 			"name": {
 				Description: "Journey Segment name.",
@@ -26,22 +29,25 @@ func dataSourceJourneySegment() *schema.Resource {
 }
 
 func dataSourceJourneySegmentRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	sdkConfig := m.(*ProviderMeta).ClientConfig
+	sdkConfig := m.(*provider.ProviderMeta).ClientConfig
 	journeyApi := platformclientv2.NewJourneyApiWithConfig(sdkConfig)
+	var response *platformclientv2.APIResponse
 
 	name := d.Get("name").(string)
 
-	return WithRetries(ctx, 15*time.Second, func() *resource.RetryError {
+	return util.WithRetries(ctx, 15*time.Second, func() *retry.RetryError {
 		pageCount := 1 // Needed because of broken journey common paging
 		for pageNum := 1; pageNum <= pageCount; pageNum++ {
 			const pageSize = 100
-			journeySegments, _, getErr := journeyApi.GetJourneySegments("", pageSize, pageNum, true, nil, nil, "")
+			journeySegments, resp, getErr := journeyApi.GetJourneySegments("", pageSize, pageNum, true, nil, nil, "")
 			if getErr != nil {
-				return resource.NonRetryableError(fmt.Errorf("failed to get page of journey segments: %v", getErr))
+				return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_journey_segment", fmt.Sprintf("failed to get page of journey segments: %v", getErr), resp))
 			}
 
+			response = resp
+
 			if journeySegments.Entities == nil || len(*journeySegments.Entities) == 0 {
-				return resource.RetryableError(fmt.Errorf("no journey segment found with name %s", name))
+				return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_journey_segment", fmt.Sprintf("no journey segment found with name %s", name), resp))
 			}
 
 			for _, journeySegment := range *journeySegments.Entities {
@@ -53,6 +59,6 @@ func dataSourceJourneySegmentRead(ctx context.Context, d *schema.ResourceData, m
 
 			pageCount = *journeySegments.PageCount
 		}
-		return resource.RetryableError(fmt.Errorf("no journey segment found with name %s", name))
+		return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError("genesyscloud_journey_segment", fmt.Sprintf("no journey segment found with name %s", name), response))
 	})
 }
