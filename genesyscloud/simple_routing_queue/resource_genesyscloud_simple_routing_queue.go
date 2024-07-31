@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"log"
-	gcloud "terraform-provider-genesyscloud/genesyscloud"
 	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	"terraform-provider-genesyscloud/genesyscloud/util"
+	"terraform-provider-genesyscloud/genesyscloud/util/constants"
 	"time"
 )
 
@@ -55,7 +57,8 @@ func readSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta in
 	// TODO 1: Get an instance of the proxy
 
 	log.Printf("Reading simple queue %s", d.Id())
-	return gcloud.WithRetriesForRead(ctx, d, func() *resource.RetryError {
+	cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceSimpleRoutingQueue(), constants.DefaultConsistencyChecks, resourceName)
+	return util.WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		/*
 			TODO 2: Call the proxy function getRoutingQueue(ctx context.Context, id string) to find our queue, passing in the ID from the resource data object
 			The returned value are: Queue (*platformclientv2.Queue), Status Code (int), error
@@ -63,12 +66,9 @@ func readSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta in
 			If the status code is 404, return a resource.RetryableError. Otherwise, it should be a NonRetryableError
 		*/
 
-		// Define consistency checker
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceSimpleRoutingQueue())
-
 		// TODO 3: Set our values in the schema resource data, based on the values in the Queue object returned from the API
 
-		return cc.CheckState()
+		return cc.CheckState(d)
 	})
 }
 
@@ -89,7 +89,7 @@ func updateSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta 
 // deleteSimpleRoutingQueue is used by the genesyscloud_simple_routing_queue resource to delete a simple queue from Genesys cloud.
 func deleteSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	// TODO 1: Get an instance of the proxy (done)
-	sdkConfig := meta.(*gcloud.ProviderMeta).ClientConfig
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	proxy := getSimpleRoutingQueueProxy(sdkConfig)
 
 	/*
@@ -99,18 +99,18 @@ func deleteSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta 
 
 	log.Printf("Deleting simple queue %s", d.Id())
 	// Check that queue has been deleted by trying to get it from the API
-	return gcloud.WithRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return util.WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		_, respCode, err := proxy.getRoutingQueue(ctx, d.Id())
 
 		if err == nil {
-			return resource.NonRetryableError(fmt.Errorf("error deleting routing queue %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("error deleting routing queue %s: %s", d.Id(), err))
 		}
-		if gcloud.IsStatus404ByInt(respCode) {
+		if util.IsStatus404ByInt(respCode) {
 			// Success: Routing Queue deleted
 			log.Printf("Deleted routing queue %s", d.Id())
 			return nil
 		}
 
-		return resource.RetryableError(fmt.Errorf("routing queue %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("routing queue %s still exists", d.Id()))
 	})
 }

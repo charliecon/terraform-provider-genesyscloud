@@ -3,7 +3,7 @@ package simple_routing_queue
 import (
 	"context"
 	"fmt"
-	"github.com/mypurecloud/platform-client-sdk-go/v105/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
 
 type createRoutingQueueFunc func(context.Context, *simpleRoutingQueueProxy, *platformclientv2.Createqueuerequest) (*platformclientv2.Queue, *platformclientv2.APIResponse, error)
@@ -90,7 +90,7 @@ func getRoutingQueueFn(ctx context.Context, proxy *simpleRoutingQueueProxy, id s
 func getRoutingQueueIdByNameFn(ctx context.Context, proxy *simpleRoutingQueueProxy, name string) (string, bool, error) {
 	for pageNum := 1; ; pageNum++ {
 		const pageSize = 100
-		queues, _, getErr := proxy.routingApi.GetRoutingQueues(pageNum, pageSize, name, "", nil, nil, nil, false)
+		queues, _, getErr := proxy.routingApi.GetRoutingQueues(pageNum, pageSize, "", name, nil, nil, nil, "", false)
 		if getErr != nil {
 			return "", false, getErr
 		}

@@ -3,10 +3,10 @@ package simple_routing_queue
 import (
 	"context"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"log"
-	gcloud "terraform-provider-genesyscloud/genesyscloud"
+	"terraform-provider-genesyscloud/genesyscloud/util"
 	"time"
 )
 
@@ -23,7 +23,7 @@ func dataSourceSimpleRoutingQueueRead(ctx context.Context, d *schema.ResourceDat
 	name := d.Get("name").(string)
 
 	log.Printf("Finding queue by name '%s'", name)
-	return gcloud.WithRetries(ctx, 15*time.Second, func() *resource.RetryError {
+	return util.WithRetries(ctx, 15*time.Second, func() *retry.RetryError {
 		// TODO 3: Call to the proxy function getRoutingQueueIdByName(context.Context, string)
 		// This function returns values in the following order: queueId (string), retryable (bool), err (error)
 
