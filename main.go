@@ -54,7 +54,6 @@ import (
 	obDncList "terraform-provider-genesyscloud/genesyscloud/outbound_dnclist"
 	obfst "terraform-provider-genesyscloud/genesyscloud/outbound_filespecificationtemplate"
 	obRuleset "terraform-provider-genesyscloud/genesyscloud/outbound_ruleset"
-	obs "terraform-provider-genesyscloud/genesyscloud/outbound_ruleset"
 	obSequence "terraform-provider-genesyscloud/genesyscloud/outbound_sequence"
 	obSettings "terraform-provider-genesyscloud/genesyscloud/outbound_settings"
 	obwm "terraform-provider-genesyscloud/genesyscloud/outbound_wrapupcode_mappings"
@@ -79,6 +78,7 @@ import (
 	routingUtilization "terraform-provider-genesyscloud/genesyscloud/routing_utilization"
 	routingUtilizationLabel "terraform-provider-genesyscloud/genesyscloud/routing_utilization_label"
 	"terraform-provider-genesyscloud/genesyscloud/scripts"
+	simpleRoutingQueue "terraform-provider-genesyscloud/genesyscloud/simple_routing_queue"
 	"terraform-provider-genesyscloud/genesyscloud/station"
 	workbin "terraform-provider-genesyscloud/genesyscloud/task_management_workbin"
 	workitem "terraform-provider-genesyscloud/genesyscloud/task_management_workitem"
@@ -194,7 +194,6 @@ func registerResources() {
 	flowOutcome.SetRegistrar(regInstance)                                  //Registering flow outcome
 	station.SetRegistrar(regInstance)                                      //Registering station
 	pat.SetRegistrar(regInstance)                                          //Registering process automation triggers
-	obs.SetRegistrar(regInstance)                                          //Resistering outbound ruleset
 	ob.SetRegistrar(regInstance)                                           //Registering outbound
 	obwm.SetRegistrar(regInstance)                                         //Registering outbound wrapup code mappings
 	oAuthSettings.SetRegistrar(regInstance)                                //Registering organization authentication settings
@@ -270,12 +269,12 @@ func registerResources() {
 	cMessageSettings.SetRegistrar(regInstance)                             // Registering conversations messaging settings
 	routingSkillGroup.SetRegistrar(regInstance)                            //Registering routing skill group
 
-	/* CREATE-TODO: Import the simple_routing_queue package and call it's SetRegistrar function, as above. */
+	// CREATE-TODO: Import the simple_routing_queue package and call it's SetRegistrar function, as with the other packages above.
+	simpleRoutingQueue.SetRegistrar(regInstance)
 
 	// setting resources for Use cases  like TF export where provider is used in resource classes.
 	tfexp.SetRegistrar(regInstance) //Registering tf exporter
 	registrar.SetResources(providerResources, providerDataSources)
-
 }
 
 func (r *RegisterInstance) RegisterResource(resourceName string, resource *schema.Resource) {

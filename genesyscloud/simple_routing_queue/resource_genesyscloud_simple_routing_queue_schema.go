@@ -19,23 +19,51 @@ func ResourceSimpleRoutingQueue() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Simple Routing Queue",
 
-		// CREATE-TODO: Specify our our functions that we defined in resource_genesyscloud_simple_routing_queue.go for performing CRUD operations.
+		// CREATE-TODO 1: Specify our our functions that we defined in resource_genesyscloud_simple_routing_queue.go for performing CRUD operations.
 		// For example:
-		// ReadContext: gcloud.ReadWithPooledClient(readSimpleRoutingQueue)
+		// CreateContext: provider.CreateWithPooledClient(createSimpleRoutingQueue),
+		CreateContext: provider.CreateWithPooledClient(createSimpleRoutingQueue),
+		ReadContext:   provider.ReadWithPooledClient(readSimpleRoutingQueue),
+		UpdateContext: provider.UpdateWithPooledClient(updateSimpleRoutingQueue),
+		DeleteContext: provider.DeleteWithPooledClient(deleteSimpleRoutingQueue),
 
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
 		SchemaVersion: 1,
-		Schema:        map[string]*schema.Schema{
+		// Here are the docs for the Schema struct: https://pkg.go.dev/github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema#Schema
+		Schema: map[string]*schema.Schema{
 			/*
-				CREATE-TODO: Define the following three fields:
-				1. "name"                 | type: string  | required | description: "The name of our routing queue."
-				2. "calling_party_name"   | type: string  | optional | description: "The name to use for caller identification for outbound calls from this queue."
-				3. "enable_transcription" | type: boolean | optional | description: "Indicates whether voice transcription is enabled for this queue."
+				CREATE-TODO 2: Define the following three fields:
+				1. "name"                 | Type: schema.TypeString  | Required | Description: "The name of the simple routing queue."
+				2. "calling_party_name"   | Type: schema.TypeString  | Optional | Description: "The name to use for caller identification for outbound calls from this queue."
+				3. "enable_transcription" | Type: schema.TypeBool    | Optional | Description: "Indicates whether voice transcription is enabled for this queue."
 				Note: The field "enable_transcription" is also Computed. This lets the provider know that the API will compute and return a value, should
 					the user not specify one in the resource config.
+
+				An example field:
+				"foo_bar": {
+				    Description: "The foo for the bar.",
+					Required:    true,
+					Type:        schema.TypeString,
+				},
 			*/
+			"name": {
+				Description: "The name of the simple routing queue.",
+				Type:        schema.TypeString,
+				Required:    true,
+			},
+			"calling_party_name": {
+				Description: "The name to use for caller identification for outbound calls from this queue.",
+				Type:        schema.TypeString,
+				Optional:    true,
+			},
+			"enable_transcription": {
+				Description: "Indicates whether voice transcription is enabled for this queue.",
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Computed:    true,
+			},
 		},
 	}
 }
@@ -43,13 +71,18 @@ func ResourceSimpleRoutingQueue() *schema.Resource {
 func DataSourceSimpleRoutingQueue() *schema.Resource {
 	return &schema.Resource{
 		Description: "Data source for Genesys Cloud Simple Routing Queues.",
-		// CREATE-TODO: As above, specify the function dataSourceSimpleRoutingQueueRead as the ReadContext of this Resource object
-
+		// CREATE-TODO 3: As above, specify the function dataSourceSimpleRoutingQueueRead as the ReadContext of this Resource object
+		ReadContext: provider.ReadWithPooledClient(dataSourceSimpleRoutingQueueRead),
 		Schema: map[string]*schema.Schema{
 			/*
-				CREATE-TODO: Define the only field in our data source:
-				"name" | type: string | required | description: "The name of our routing queue."
+				CREATE-TODO 4: Define the only field in our data source:
+				"name" | Type: schema.TypeString  | Required | Description: "The name of the simple routing queue."
 			*/
+			"name": {
+				Description: "The name of the simple routing queue.",
+				Type:        schema.TypeString,
+				Required:    true,
+			},
 		},
 	}
 }
