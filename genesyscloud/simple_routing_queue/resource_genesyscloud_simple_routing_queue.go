@@ -8,7 +8,6 @@ import (
 	"terraform-provider-genesyscloud/genesyscloud/provider"
 	"terraform-provider-genesyscloud/genesyscloud/util"
 	"terraform-provider-genesyscloud/genesyscloud/util/constants"
-	"terraform-provider-genesyscloud/genesyscloud/util/resourcedata"
 	"time"
 
 	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
@@ -59,37 +58,22 @@ utils file in the package.  This will keep the code manageable and easy to work 
 // createSimpleRoutingQueue is used by the genesyscloud_simple_routing_queue resource to create a simple queue in Genesys cloud.
 func createSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	// CREATE-TODO 1: Get an instance of the proxy (example can be found in the delete method below)
-	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
-	proxy := getSimpleRoutingQueueProxy(sdkConfig)
 
 	// CREATE-TODO 2: Create variables for each field in our schema.ResourceData object
 	// Example:
 	// name := d.Get("name").(string)
-	name := d.Get("name").(string)
-	enableTranscription := d.Get("enable_transcription").(bool)
-	callingPartyName := d.Get("calling_party_name").(string)
 
-	log.Printf("Creating simple queue %s", name)
+	log.Printf("Creating simple routing queue")
 
 	// CREATE-TODO 3: Create a queue struct using the Genesys Cloud platform go sdk
 	// Here is the source code for the struct we will be using - https://github.com/MyPureCloud/platform-client-sdk-go/blob/master/platformclientv2/createqueuerequest.go
 	// (Remember - we only need to worry about the three fields defined in our schema)
-	simpleQueue := &platformclientv2.Createqueuerequest{
-		Name:                &name,
-		EnableTranscription: &enableTranscription,
-		CallingPartyName:    &callingPartyName,
-	}
 
 	// CREATE-TODO 4: Call the proxy function to create our queue. The proxy function we want to use here is createSimpleRoutingQueue(ctx context.Context, queue *platformclientv2.Createqueuerequest)
 	// If the returned error is not nil, use the BuildAPIDiagnosticError function in the util package to build our error message
-	queue, resp, err := proxy.createSimpleRoutingQueue(ctx, simpleQueue)
-	if err != nil {
-		return util.BuildAPIDiagnosticError(resourceName, err.Error(), resp)
-	}
 
 	// CREATE-TODO 5: Call d.SetId, passing in the ID attached to the queue object that was returned from createSimpleRoutingQueue
 	// This will set the ID of this resource in our tf.state file
-	d.SetId(*queue.Id)
 
 	log.Println("Created simple routing queue")
 	return readSimpleRoutingQueue(ctx, d, meta)
@@ -98,8 +82,6 @@ func createSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta 
 // readSimpleRoutingQueue is used by the genesyscloud_simple_routing_queue resource to read a simple queue from Genesys cloud.
 func readSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	// CREATE-TODO 1: Get an instance of the proxy
-	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
-	proxy := getSimpleRoutingQueueProxy(sdkConfig)
 
 	log.Printf("Reading simple queue %s", d.Id())
 	cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceSimpleRoutingQueue(), constants.DefaultConsistencyChecks, resourceName)
@@ -114,22 +96,12 @@ func readSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta in
 			To build our error message, pass the function util.BuildWithRetriesApiDiagnosticError(resourceName string, summary string, response *platformclientv2.APIResponse)
 			into the (Non)RetryableError method
 		*/
-		queue, resp, err := proxy.getSimpleRoutingQueue(ctx, d.Id())
-		if err != nil {
-			if util.IsStatus404(resp) {
-				return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError(resourceName, err.Error(), resp))
-			}
-			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError(resourceName, err.Error(), resp))
-		}
 
 		// CREATE-TODO 3: Set our values in the schema resource data, based on the values in the Queue object returned from the API
 		// For fields that are optional, we should check if the returned value is nil before dereferencing it. We can accomplish this using the
 		// method SetNillableValue in the resourcedata package. An example of this being done with calling_party_name:
 		// resourcedata.SetNillableValue(d, "calling_party_name", queue.CallingPartyName)
 		// There is no need to use this for the name field since we know the pointer to the value will never be nil, so we can use the standard d.Set("name", *queue.Name)
-		_ = d.Set("name", *queue.Name)
-		resourcedata.SetNillableValue(d, "calling_party_name", queue.CallingPartyName)
-		resourcedata.SetNillableValue(d, "enable_transcription", queue.EnableTranscription)
 
 		log.Println("Read simple routing queue")
 		return cc.CheckState(d)
@@ -140,20 +112,10 @@ func readSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta in
 func updateSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	log.Printf("Updating simple queue %s", d.Id())
 	// CREATE-TODO 1: Get an instance of the proxy
-	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
-	proxy := getSimpleRoutingQueueProxy(sdkConfig)
 
 	// CREATE-TODO 2: Create variables for each field in our schema.ResourceData object
-	name := d.Get("name").(string)
-	enableTranscription := d.Get("enable_transcription").(bool)
-	callingPartyName := d.Get("calling_party_name").(string)
 
 	// CREATE-TODO	3: Create a queue struct using the Genesys Cloud platform go sdk
-	queueUpdate := &platformclientv2.Queuerequest{
-		Name:                &name,
-		EnableTranscription: &enableTranscription,
-		CallingPartyName:    &callingPartyName,
-	}
 
 	log.Println("Updating simple routing queue")
 
@@ -161,10 +123,6 @@ func updateSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta 
 	// We should handle our error and response objects the same way as in the createSimpleRoutingQueue method above.
 	// We won't be needing the returned Queue object, so an underscore can go in that variables place. If we were to define it, Go would complain that we're not using it,
 	// so this is our way of telling Go that we don't need it.
-	_, resp, err := proxy.updateSimpleRoutingQueue(ctx, d.Id(), queueUpdate)
-	if err != nil {
-		return util.BuildAPIDiagnosticError(resourceName, err.Error(), resp)
-	}
 
 	log.Println("Updated simple routing queue")
 	return readSimpleRoutingQueue(ctx, d, meta)
@@ -180,10 +138,6 @@ func deleteSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta 
 
 	// CREATE-TODO 2: Call the proxy function deleteSimpleRoutingQueue(ctx context.Context, id string)
 	// If the error is not nil, we should handle it as in the create and update functions
-	resp, err := proxy.deleteSimpleRoutingQueue(ctx, d.Id())
-	if err != nil {
-		return util.BuildAPIDiagnosticError(resourceName, err.Error(), resp)
-	}
 
 	// Check that queue has been deleted by trying to get it from the API
 	return util.WithRetries(ctx, 30*time.Second, func() *retry.RetryError {

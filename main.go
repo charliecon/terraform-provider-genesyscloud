@@ -78,7 +78,6 @@ import (
 	routingUtilization "terraform-provider-genesyscloud/genesyscloud/routing_utilization"
 	routingUtilizationLabel "terraform-provider-genesyscloud/genesyscloud/routing_utilization_label"
 	"terraform-provider-genesyscloud/genesyscloud/scripts"
-	simpleRoutingQueue "terraform-provider-genesyscloud/genesyscloud/simple_routing_queue"
 	"terraform-provider-genesyscloud/genesyscloud/station"
 	workbin "terraform-provider-genesyscloud/genesyscloud/task_management_workbin"
 	workitem "terraform-provider-genesyscloud/genesyscloud/task_management_workitem"
@@ -270,7 +269,6 @@ func registerResources() {
 	routingSkillGroup.SetRegistrar(regInstance)                            //Registering routing skill group
 
 	// CREATE-TODO: Import the simple_routing_queue package and call it's SetRegistrar function, as with the other packages above.
-	simpleRoutingQueue.SetRegistrar(regInstance)
 
 	// setting resources for Use cases  like TF export where provider is used in resource classes.
 	tfexp.SetRegistrar(regInstance) //Registering tf exporter

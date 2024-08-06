@@ -22,10 +22,6 @@ func ResourceSimpleRoutingQueue() *schema.Resource {
 		// CREATE-TODO 1: Specify our our functions that we defined in resource_genesyscloud_simple_routing_queue.go for performing CRUD operations.
 		// For example:
 		// CreateContext: provider.CreateWithPooledClient(createSimpleRoutingQueue),
-		CreateContext: provider.CreateWithPooledClient(createSimpleRoutingQueue),
-		ReadContext:   provider.ReadWithPooledClient(readSimpleRoutingQueue),
-		UpdateContext: provider.UpdateWithPooledClient(updateSimpleRoutingQueue),
-		DeleteContext: provider.DeleteWithPooledClient(deleteSimpleRoutingQueue),
 
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
@@ -48,22 +44,6 @@ func ResourceSimpleRoutingQueue() *schema.Resource {
 					Type:        schema.TypeString,
 				},
 			*/
-			"name": {
-				Description: "The name of the simple routing queue.",
-				Type:        schema.TypeString,
-				Required:    true,
-			},
-			"calling_party_name": {
-				Description: "The name to use for caller identification for outbound calls from this queue.",
-				Type:        schema.TypeString,
-				Optional:    true,
-			},
-			"enable_transcription": {
-				Description: "Indicates whether voice transcription is enabled for this queue.",
-				Type:        schema.TypeBool,
-				Optional:    true,
-				Computed:    true,
-			},
 		},
 	}
 }
@@ -72,17 +52,12 @@ func DataSourceSimpleRoutingQueue() *schema.Resource {
 	return &schema.Resource{
 		Description: "Data source for Genesys Cloud Simple Routing Queues.",
 		// CREATE-TODO 3: As above, specify the function dataSourceSimpleRoutingQueueRead as the ReadContext of this Resource object
-		ReadContext: provider.ReadWithPooledClient(dataSourceSimpleRoutingQueueRead),
+
 		Schema: map[string]*schema.Schema{
 			/*
 				CREATE-TODO 4: Define the only field in our data source:
 				"name" | Type: schema.TypeString  | Required | Description: "The name of the simple routing queue."
 			*/
-			"name": {
-				Description: "The name of the simple routing queue.",
-				Type:        schema.TypeString,
-				Required:    true,
-			},
 		},
 	}
 }
