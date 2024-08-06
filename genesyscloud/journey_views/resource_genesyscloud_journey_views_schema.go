@@ -1,10 +1,11 @@
 package journey_views
 
 import (
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 	"terraform-provider-genesyscloud/genesyscloud/provider"
 	registrar "terraform-provider-genesyscloud/genesyscloud/resource_register"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
 
 const resourceName = "genesyscloud_journey_views"
@@ -161,11 +162,6 @@ var (
 
 func SetRegistrar(regInstance registrar.Registrar) {
 	regInstance.RegisterResource(resourceName, ResourceJourneyViews())
-	/***
-	TODO: Add DataSource and Exporter once we are done with https://inindca.atlassian.net/browse/JM-109
-	regInstance.RegisterDataSource(resourceName, DataSourceGroup())
-	regInstance.RegisterExporter(resourceName, JourneyViewExporter())
-	***/
 }
 
 func ResourceJourneyViews() *schema.Resource {

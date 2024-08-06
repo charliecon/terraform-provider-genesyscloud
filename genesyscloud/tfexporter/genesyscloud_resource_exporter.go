@@ -397,7 +397,6 @@ func (g *GenesysCloudResourceExporter) buildResourceConfigMap() diag.Diagnostics
 			g.sanitizeDataConfigMap(jsonResult)
 		}
 
-		// TODO put this in separate call
 		exporters := *g.exporters
 		if resourceFilesWriterFunc := exporters[resource.Type].CustomFileWriter.RetrieveAndWriteFilesFunc; resourceFilesWriterFunc != nil {
 			exportDir, _ := getFilePath(g.d, "")

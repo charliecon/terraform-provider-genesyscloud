@@ -217,7 +217,6 @@ func generateGroupOwners(userIDs ...string) string {
 	`, strings.Join(userIDs, ","))
 }
 
-// TODO: Duplicating this code within the function to not break a cyclic dependency
 func generateUserWithCustomAttrs(resourceID string, email string, name string, attrs ...string) string {
 	return fmt.Sprintf(`resource "genesyscloud_user" "%s" {
 		email = "%s"

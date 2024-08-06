@@ -2,12 +2,13 @@ package simple_routing_queue
 
 import (
 	"fmt"
-	"github.com/google/uuid"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"strconv"
 	"terraform-provider-genesyscloud/genesyscloud/provider"
 	"terraform-provider-genesyscloud/genesyscloud/util"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 )
 
 func TestAccResourceSimpleRoutingQueue(t *testing.T) {
@@ -17,7 +18,7 @@ func TestAccResourceSimpleRoutingQueue(t *testing.T) {
 		callingPartyName    = "Example Inc."
 		enableTranscription = "true"
 
-		fullResourcePath = resourceName + "." + resourceId
+		fullResourcePath = fmt.Sprintf("%s.%s", resourceName, resourceId)
 	)
 
 	resource.Test(t, resource.TestCase{
@@ -34,7 +35,7 @@ func TestAccResourceSimpleRoutingQueue(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr(fullResourcePath, "name", name),
 					resource.TestCheckResourceAttr(fullResourcePath, "calling_party_name", callingPartyName),
-					resource.TestCheckResourceAttr(fullResourcePath, "enable_transcription", "true"),
+					resource.TestCheckResourceAttr(fullResourcePath, "enable_transcription", util.TrueValue),
 				),
 			},
 		},

@@ -1,10 +1,11 @@
 package journey_views
 
 import (
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"sync"
 	"terraform-provider-genesyscloud/genesyscloud"
 	"testing"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 //var providerDataSources map[string]*schema.Resource
@@ -26,24 +27,13 @@ func (r *registerTestInstance) registerTestResources() {
 
 }
 
-// registerTestDataSources registers all data sources used in the tests.
-/* TODO:
-func (r *registerTestInstance) registerTestDataSources() {
-	r.datasourceMapMutex.Lock()
-	defer r.datasourceMapMutex.Unlock()
-
-	providerDataSources[resourceName] = DataSourceGroup()
-}*/
-
 // initTestResources initializes all test resources and data sources.
 func initTestResources() {
-	//TODO: providerDataSources = make(map[string]*schema.Resource)
 	providerResources = make(map[string]*schema.Resource)
 
 	regInstance := &registerTestInstance{}
 
 	regInstance.registerTestResources()
-	//TODO: regInstance.registerTestDataSources()
 }
 
 // TestMain is a "setup" function called by the testing framework when run the test

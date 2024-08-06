@@ -16,8 +16,8 @@ func TestAccDataSourceSimpleRoutingQueue(t *testing.T) {
 		dataSourceId    = "queue_data"
 		simpleQueueName = "Create2023 queue " + uuid.NewString()
 
-		fullPathToResource   = resourceName + "." + resourceId
-		fullPathToDataSource = "data." + resourceName + "." + dataSourceId
+		fullPathToResource   = fmt.Sprintf("%s.%s", resourceName, resourceId)
+		fullPathToDataSource = fmt.Sprintf("data.%s.%s", resourceName, dataSourceId)
 	)
 
 	resource.Test(t, resource.TestCase{
@@ -28,8 +28,8 @@ func TestAccDataSourceSimpleRoutingQueue(t *testing.T) {
 				Config: generateSimpleRoutingQueueResource(
 					resourceId,
 					simpleQueueName,
-					"null",
-					"null",
+					util.NullValue,
+					util.NullValue,
 				) + generateSimpleRoutingQueueDataSource(
 					dataSourceId,
 					simpleQueueName,

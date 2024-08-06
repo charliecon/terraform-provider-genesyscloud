@@ -436,7 +436,6 @@ func getDidNumbers(api *platformclientv2.TelephonyProvidersEdgeApi, pageNumber i
 	return result, nil
 }
 
-// TODO: When the auth division resource is moved to its own package, reference the generate function there and remove this one.
 func generateAuthDivisionResourceForIvrTests(
 	resourceID string,
 	name string,

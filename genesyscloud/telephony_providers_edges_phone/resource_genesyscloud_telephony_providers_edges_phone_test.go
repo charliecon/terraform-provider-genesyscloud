@@ -188,7 +188,6 @@ func TestAccResourceHardPhoneStandalone(t *testing.T) {
 	number := "+13172128941"
 	phoneMac := "AB12CD34"
 	phoneMacUpdated := "BANANAS"
-	// TODO: Use did pool resource inside config once cyclic dependency issue is resolved between genesyscloud and did_pools package
 	didPoolId, err := createDidPoolForEdgesPhoneTest(sdkConfig, number)
 	if err != nil {
 		t.Fatal(err)
@@ -588,8 +587,6 @@ func generatePhoneCapabilities(
 	`, provisions, registers, dualRegisters, allowReboot, noRebalance, noCloudProvisioning, cdm, hardwareIdType, strings.Join(mediaCodecs, ","))
 }
 
-// TODO: Generate DID Pool resource inside test config when edges_phone has been moved to its own package
-// and the cyclic dependency issue is resolved
 func createDidPoolForEdgesPhoneTest(config *platformclientv2.Configuration, number string) (string, error) {
 	api := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(config)
 	body := &platformclientv2.Didpool{

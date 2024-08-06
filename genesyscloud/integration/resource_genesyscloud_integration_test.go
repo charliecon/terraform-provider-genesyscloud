@@ -418,7 +418,6 @@ func testVerifyIntegrationAndUsersDestroyed(state *terraform.State) error {
 	return nil
 }
 
-// TODO: Duplicating this code within the function to not break a cyclic dependency
 func generateUserWithCustomAttrs(resourceID string, email string, name string, attrs ...string) string {
 	return fmt.Sprintf(`resource "genesyscloud_user" "%s" {
 		email = "%s"
@@ -428,7 +427,6 @@ func generateUserWithCustomAttrs(resourceID string, email string, name string, a
 	`, resourceID, email, name, strings.Join(attrs, "\n"))
 }
 
-// TODO: Duplicating this code within the function to not break a cyclic dependency
 func generateBasicGroupResource(resourceID string, name string, nestedBlocks ...string) string {
 	return generateGroupResource(resourceID, name, util.NullValue, util.NullValue, util.NullValue, util.TrueValue, nestedBlocks...)
 }

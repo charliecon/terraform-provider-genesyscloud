@@ -10,9 +10,9 @@ import (
 	"terraform-provider-genesyscloud/genesyscloud/architect_flow"
 	authRole "terraform-provider-genesyscloud/genesyscloud/auth_role"
 	"terraform-provider-genesyscloud/genesyscloud/provider"
+	routingEmailDomain "terraform-provider-genesyscloud/genesyscloud/routing_email_domain"
 	routingLanguage "terraform-provider-genesyscloud/genesyscloud/routing_language"
 	routingQueue "terraform-provider-genesyscloud/genesyscloud/routing_queue"
-	routingEmailDomain "terraform-provider-genesyscloud/genesyscloud/routing_email_domain"
 	userRoles "terraform-provider-genesyscloud/genesyscloud/user_roles"
 	"terraform-provider-genesyscloud/genesyscloud/util"
 	"testing"
@@ -2407,7 +2407,6 @@ func GenerateResourceRoles(skillID string, divisionIds ...string) string {
 	`, skillID, divAttr)
 }
 
-// TODO Duplicating this code within the function to not break a cyclid dependency
 func generateUserWithCustomAttrs(resourceID string, email string, name string, attrs ...string) string {
 	return fmt.Sprintf(`resource "genesyscloud_user" "%s" {
 		email = "%s"
