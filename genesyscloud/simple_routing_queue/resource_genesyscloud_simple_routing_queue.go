@@ -3,16 +3,39 @@ package simple_routing_queue
 import (
 	"context"
 	"fmt"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"log"
 	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
 	"terraform-provider-genesyscloud/genesyscloud/provider"
 	"terraform-provider-genesyscloud/genesyscloud/util"
 	"terraform-provider-genesyscloud/genesyscloud/util/constants"
 	"time"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/mypurecloud/platform-client-sdk-go/v133/platformclientv2"
 )
+
+func getAllRoutingQueues(ctx context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
+	proxy := getSimpleRoutingQueueProxy(clientConfig)
+
+	// Newly created resources often aren't returned unless there's a delay
+	time.Sleep(5 * time.Second)
+
+	queues, resp, err := proxy.getAllRoutingQueues(ctx)
+	if err != nil {
+		return nil, util.BuildAPIDiagnosticError(resourceName, fmt.Sprintf("failed to get routing queues: %v", err), resp)
+	}
+
+	for _, queue := range *queues {
+		resources[*queue.Id] = &resourceExporter.ResourceMeta{Name: *queue.Name}
+	}
+
+	return resources, nil
+}
 
 /*
 The resource_genesyscloud_simple_routing_queue.go contains all of the methods that perform the core logic for a resource.
@@ -100,12 +123,12 @@ func deleteSimpleRoutingQueue(ctx context.Context, d *schema.ResourceData, meta 
 	log.Printf("Deleting simple queue %s", d.Id())
 	// Check that queue has been deleted by trying to get it from the API
 	return util.WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
-		_, respCode, err := proxy.getRoutingQueue(ctx, d.Id())
+		_, resp, err := proxy.getRoutingQueue(ctx, d.Id())
 
 		if err == nil {
 			return retry.NonRetryableError(fmt.Errorf("error deleting routing queue %s: %s", d.Id(), err))
 		}
-		if util.IsStatus404ByInt(respCode) {
+		if util.IsStatus404(resp) {
 			// Success: Routing Queue deleted
 			log.Printf("Deleted routing queue %s", d.Id())
 			return nil

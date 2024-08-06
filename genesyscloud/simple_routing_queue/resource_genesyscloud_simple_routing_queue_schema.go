@@ -1,8 +1,11 @@
 package simple_routing_queue
 
 import (
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"terraform-provider-genesyscloud/genesyscloud/provider"
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 	registrar "terraform-provider-genesyscloud/genesyscloud/resource_register"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 const resourceName = "genesyscloud_simple_routing_queue"
@@ -24,7 +27,7 @@ func ResourceSimpleRoutingQueue() *schema.Resource {
 			StateContext: schema.ImportStatePassthroughContext,
 		},
 		SchemaVersion: 1,
-		Schema: map[string]*schema.Schema{
+		Schema:        map[string]*schema.Schema{
 			/*
 				TODO: Define the following three fields:
 				1. "name"                 | type: string  | required | description: "The name of our routing queue."
@@ -48,5 +51,11 @@ func DataSourceSimpleRoutingQueue() *schema.Resource {
 				"name" | type: string | required | description: "The name of our routing queue."
 			*/
 		},
+	}
+}
+
+func RoutingQueueExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: provider.GetAllWithPooledClient(getAllRoutingQueues),
 	}
 }
