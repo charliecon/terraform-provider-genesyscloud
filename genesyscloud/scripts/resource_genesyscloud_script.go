@@ -56,6 +56,32 @@ func createScript(ctx context.Context, d *schema.ResourceData, meta interface{})
 	return readScript(ctx, d, meta)
 }
 
+// readScript contains all of the logic needed to read a script from Genesys Cloud
+func readScript(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
+	scriptsProxy := getScriptsProxy(sdkConfig)
+	cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceScript(), constants.DefaultConsistencyChecks, resourceName)
+
+	return util.WithRetriesForRead(ctx, d, func() *retry.RetryError {
+		script, resp, err := scriptsProxy.getScriptById(ctx, d.Id())
+		if err != nil && resp.StatusCode == http.StatusNotFound {
+			diagErr := util.BuildWithRetriesApiDiagnosticError(resourceName, fmt.Sprintf("Failed to read flow %s | error: %s", d.Id(), err), resp)
+			if util.IsStatus404(resp) {
+				return retry.RetryableError(diagErr)
+			}
+			return retry.NonRetryableError(diagErr)
+		}
+
+		if script.Name != nil {
+			_ = d.Set("script_name", *script.Name)
+		}
+
+		log.Printf("Read script %s %s", d.Id(), *script.Name)
+		return cc.CheckState(d)
+	})
+}
+
+// updateScript contains all the logic needed to update a script on Genesys Cloud
 func updateScript(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	scriptsProxy := getScriptsProxy(sdkConfig)
@@ -79,32 +105,7 @@ func updateScript(ctx context.Context, d *schema.ResourceData, meta interface{})
 	return readScript(ctx, d, meta)
 }
 
-// readScript contains all of the logic needed to read resource data from Genesys Cloud
-func readScript(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
-	scriptsProxy := getScriptsProxy(sdkConfig)
-	cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceScript(), constants.DefaultConsistencyChecks, resourceName)
-
-	return util.WithRetriesForRead(ctx, d, func() *retry.RetryError {
-		script, resp, err := scriptsProxy.getScriptById(ctx, d.Id())
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return retry.RetryableError(util.BuildWithRetriesApiDiagnosticError(resourceName, fmt.Sprintf("Failed to read flow %s | error: %s", d.Id(), err), resp))
-		}
-
-		if err != nil {
-			return retry.NonRetryableError(util.BuildWithRetriesApiDiagnosticError(resourceName, fmt.Sprintf("Failed to read flow %s | error: %s", d.Id(), err), resp))
-		}
-
-		if script.Name != nil {
-			_ = d.Set("script_name", *script.Name)
-		}
-
-		log.Printf("Read script %s %s", d.Id(), *script.Name)
-		return cc.CheckState(d)
-	})
-}
-
-// deleteScript contains all the logic needed to delete a resource from Genesys Cloud
+// deleteScript contains all the logic needed to delete a script from Genesys Cloud
 func deleteScript(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	scriptsProxy := getScriptsProxy(sdkConfig)
