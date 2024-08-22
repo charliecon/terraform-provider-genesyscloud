@@ -56,30 +56,7 @@ func createScript(ctx context.Context, d *schema.ResourceData, meta interface{})
 	return readScript(ctx, d, meta)
 }
 
-func updateScript(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
-	scriptsProxy := getScriptsProxy(sdkConfig)
-
-	filePath := d.Get("filepath").(string)
-	scriptName := d.Get("script_name").(string)
-	substitutions := d.Get("substitutions").(map[string]interface{})
-
-	log.Printf("Updating script '%s' %s", scriptName, d.Id())
-
-	scriptId, err := scriptsProxy.updateScript(ctx, filePath, scriptName, d.Id(), substitutions)
-	if err != nil {
-		return diag.FromErr(err)
-	}
-	if scriptId != d.Id() {
-		log.Printf("ID of script '%s' changed from '%s' to '%s' after update.", scriptName, d.Id(), scriptId)
-		d.SetId(scriptId)
-	}
-
-	log.Printf("Updated script '%s' %s", scriptName, d.Id())
-	return readScript(ctx, d, meta)
-}
-
-// readScript contains all of the logic needed to read resource data from Genesys Cloud
+// readScript contains all of the logic needed to read a script from Genesys Cloud
 func readScript(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	scriptsProxy := getScriptsProxy(sdkConfig)
@@ -104,7 +81,31 @@ func readScript(ctx context.Context, d *schema.ResourceData, meta interface{}) d
 	})
 }
 
-// deleteScript contains all the logic needed to delete a resource from Genesys Cloud
+// updateScript contains all the logic needed to update a script on Genesys Cloud
+func updateScript(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
+	scriptsProxy := getScriptsProxy(sdkConfig)
+
+	filePath := d.Get("filepath").(string)
+	scriptName := d.Get("script_name").(string)
+	substitutions := d.Get("substitutions").(map[string]interface{})
+
+	log.Printf("Updating script '%s' %s", scriptName, d.Id())
+
+	scriptId, err := scriptsProxy.updateScript(ctx, filePath, scriptName, d.Id(), substitutions)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+	if scriptId != d.Id() {
+		log.Printf("ID of script '%s' changed from '%s' to '%s' after update.", scriptName, d.Id(), scriptId)
+		d.SetId(scriptId)
+	}
+
+	log.Printf("Updated script '%s' %s", scriptName, d.Id())
+	return readScript(ctx, d, meta)
+}
+
+// deleteScript contains all the logic needed to delete a script from Genesys Cloud
 func deleteScript(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	sdkConfig := meta.(*provider.ProviderMeta).ClientConfig
 	scriptsProxy := getScriptsProxy(sdkConfig)
